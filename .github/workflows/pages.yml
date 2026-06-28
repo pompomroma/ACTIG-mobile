@@ -29,12 +29,13 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # NOTE: GitHub does not allow the Actions token to *create* the Pages site
+      # (it returns "Resource not accessible by integration"). The repo owner
+      # must turn Pages on ONCE: repo Settings -> Pages -> Build and deployment ->
+      # Source: "GitHub Actions" (doable from Safari). After that this deploys
+      # automatically on every push.
       - name: Configure Pages
         uses: actions/configure-pages@v5
-        with:
-          # Auto-create the Pages site on first run (uses the pages:write token),
-          # so no manual Settings toggle is needed.
-          enablement: true
       - name: Upload web/ as Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
