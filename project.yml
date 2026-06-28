@@ -24,13 +24,13 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     SWIFT_STRICT_CONCURRENCY: targeted
 
-packages:
-  # On-device LLM. Optional at first build; the LocalEngine has a stub fallback
-  # so the project compiles even before you add the dependency in Xcode.
-  # Uncomment to wire MLX in:
-  # MLXSwift:
-  #   url: https://github.com/ml-explore/mlx-swift-examples
-  #   from: "1.0.0"
+# On-device LLM is optional at first build; LocalEngine has a stub fallback so
+# the project compiles before the dependency exists. To wire MLX in, add a
+# top-level `packages:` map and a target dependency, e.g.:
+#   packages:
+#     MLXSwift:
+#       url: https://github.com/ml-explore/mlx-swift-examples
+#       from: "1.0.0"
 
 targets:
   ACTIG:
