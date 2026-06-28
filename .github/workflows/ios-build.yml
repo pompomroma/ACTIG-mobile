@@ -13,9 +13,16 @@ on:
 jobs:
   build-test:
     name: Build & Test (Simulator)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      # Xcode 16 (iOS 18 SDK) is required: it can read the project format
+      # XcodeGen emits, and the Control Center widget uses iOS-18-only APIs.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -27,7 +34,6 @@ jobs:
         id: sim
         run: |
           set -euo pipefail
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
           xcodebuild -version
           # Pick the first available iPhone simulator so we don't hard-code a
           # device name that may not exist on this runner's Xcode.
@@ -62,9 +68,13 @@ jobs:
     name: Archive & TestFlight
     needs: build-test
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
