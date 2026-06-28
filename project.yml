@@ -114,7 +114,12 @@ targets:
       - target: ACTIG
     settings:
       base:
+        # Let Xcode synthesize the test bundle's Info.plist (we don't ship one).
+        GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.actig.app.tests
+        # Host the unit tests inside the app so `@testable import ACTIG` resolves.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/ACTIG.app/ACTIG"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 
 schemes:
   ACTIG:
