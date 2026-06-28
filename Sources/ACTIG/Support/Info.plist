@@ -27,6 +27,8 @@
 	</dict>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>ACTIG listens for your wake word and voice commands.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
@@ -45,10 +47,23 @@
 	<string>ACTIG can access photos when you ask.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>ACTIG can read health data when you ask.</string>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>WakeACTIGIntent</string>
+		<string>OpenStudioIntent</string>
+		<string>AskACTIGIntent</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
 		<string>processing</string>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.actig.refresh</string>
+		<string>com.actig.process</string>
 	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>

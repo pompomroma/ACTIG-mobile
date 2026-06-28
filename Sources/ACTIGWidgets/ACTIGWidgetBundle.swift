@@ -13,6 +13,9 @@ struct ACTIGWidgetBundle: WidgetBundle {
         if #available(iOS 18.0, *) {
             ACTIGControl()
         }
+        if #available(iOS 16.1, *) {
+            ACTIGLiveActivity()
+        }
     }
 }
 

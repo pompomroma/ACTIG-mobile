@@ -28,6 +28,9 @@ struct ProjectSpaceView: View {
         }
         .background(Color.black)
         .onChange(of: app.gestureControlEnabled) { _, on in model.setGestureControl(on) }
+        // Expose this scene to agent tools while the studio is on screen.
+        .onAppear { app.studio = model }
+        .onDisappear { if app.studio === model { app.studio = nil } }
     }
 
     // MARK: HUD inside the studio (req 5: buttons for all functions)

@@ -16,6 +16,7 @@ final class AppState {
     let agent: Orchestrator
     let device: DeviceController
     let router: CommandRouter
+    let live = LiveActivityManager()
 
     // UI-facing state
     var transcript: [ConversationTurn] = []
@@ -23,6 +24,10 @@ final class AppState {
     var isStudioOpen: Bool = false
     var gestureControlEnabled: Bool = true
     var status: String = "Idle"
+
+    /// The live 3D studio scene, registered by `ProjectSpaceView` while open, so
+    /// agent tools can spawn/clone/scale shapes by voice or text.
+    var studio: StudioModel?
 
     init(modelContext: ModelContext) {
         let history = HistoryStore(context: modelContext)
@@ -43,12 +48,17 @@ final class AppState {
     /// wake-word listening (subject to microphone permission).
     func bootstrap() async {
         transcript = (try? history.recentTurns(limit: 200)) ?? []
+        // Give the agent its tool set now that `self` is fully initialized.
+        agent.tools = ToolRegistry.makeDefault(context: self)
         voice.onWake = { [weak self] in Task { await self?.handleWake() } }
         voice.onUtterance = { [weak self] text, lang in
             Task { await self?.submit(text, language: lang, source: .voice) }
         }
         await voice.startWakeWordListening()
         status = "Listening for \"wake up ACTIG\""
+        // Persistent presence + remote/scheduled wake (reqs 3, 8, 9).
+        live.start(status: "Listening")
+        await PushManager.shared.configure()
         await drainPendingCommand()
     }
 
@@ -68,6 +78,7 @@ final class AppState {
         guard !isAwake else { return }
         isAwake = true
         status = "Awake"
+        live.update(status: "Awake", awake: true)
         await voice.speak(Strings.wakeReaction, language: .english)
         await voice.startDictation()
     }
@@ -115,4 +126,57 @@ final class AppState {
 /// each turn was entered.
 enum InputSource: String, Codable, Sendable {
     case voice, text, siri, widget, actionButton, shortcut
+}
+
+// MARK: - Agent tool context
+
+/// Bridges the agent's tool calls to the concrete subsystems. Every action the
+/// LLM can take (open the studio, play music, open an app/Settings, create a
+/// reminder, etc.) routes through here — the same surface used by voice and text.
+extension AppState: AgentToolContext {
+    func openStudio(_ open: Bool) { toggleStudio(open) }
+
+    func spawnShape(_ name: String) -> Bool {
+        guard let studio else { toggleStudio(true); return false }
+        guard let kind = ShapeKind(rawValue: name.lowercased()) else { return false }
+        studio.spawn(kind)
+        return true
+    }
+
+    func cloneSelectedShape() -> Bool {
+        guard let studio, studio.selected != nil else { return false }
+        studio.cloneSelected(); return true
+    }
+
+    func scaleSelectedShape(_ factor: Float) -> Bool {
+        guard let studio, studio.selected != nil else { return false }
+        studio.scaleSelected(by: factor); return true
+    }
+
+    func deleteSelectedShape() -> Bool {
+        guard let studio, studio.selected != nil else { return false }
+        studio.deleteSelected(); return true
+    }
+
+    func setGestureControl(_ on: Bool) { toggleGestureControl(on) }
+    func setUserMuted(_ muted: Bool) { voice.setUserMuted(muted) }
+    func setAIMuted(_ muted: Bool) { voice.setAIMuted(muted) }
+
+    func playMusic(_ query: String) async -> Bool { await device.playMusic(query: query) }
+    func pauseMusic() { device.pauseMusic() }
+    func skipMusic() { device.skipMusic() }
+
+    func openApp(_ name: String) -> Bool { device.launchApp(named: name) }
+    func openSettingsPane(_ pane: String?) -> Bool { device.openSettings(pane: pane) }
+
+    func createReminder(_ title: String) async -> String {
+        await device.personal.createReminder(title: title)
+    }
+    func createCalendarEvent(_ title: String, at start: Date) async -> String {
+        await device.personal.createEvent(title: title, start: start)
+    }
+    func lookupContact(_ name: String) async -> String {
+        await device.personal.lookupContact(name: name)
+    }
+    func todaySteps() async -> String { await device.personal.todayStepCount() }
 }

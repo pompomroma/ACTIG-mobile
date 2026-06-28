@@ -46,6 +46,7 @@ targets:
       properties:
         CFBundleDisplayName: ACTIG
         UILaunchScreen: {}
+        NSSupportsLiveActivities: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         # Permission usage strings (required or the app crashes on first use)
@@ -58,9 +59,18 @@ targets:
         NSRemindersUsageDescription: "ACTIG can manage reminders when you ask."
         NSPhotoLibraryUsageDescription: "ACTIG can access photos when you ask."
         NSHealthShareUsageDescription: "ACTIG can read health data when you ask."
+        NSUserActivityTypes:
+          - WakeACTIGIntent
+          - OpenStudioIntent
+          - AskACTIGIntent
         UIBackgroundModes:
           - audio
           - processing
+          - fetch
+          - remote-notification
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.actig.refresh
+          - com.actig.process
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -69,6 +79,10 @@ targets:
       path: Sources/ACTIG/Support/ACTIG.entitlements
       properties:
         com.apple.developer.siri: true
+        aps-environment: development
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
+        com.apple.developer.kernel.increased-memory-limit: true
         com.apple.security.application-groups:
           - group.com.actig.shared
     settings:
@@ -90,6 +104,7 @@ targets:
       - path: Sources/ACTIG/Core/Intents/ACTIGIntents.swift
       - path: Sources/ACTIG/Core/Common/SharedSignal.swift
       - path: Sources/ACTIG/Core/Common/Strings.swift
+      - path: Sources/ACTIG/Core/Common/ACTIGActivityAttributes.swift
     info:
       path: Sources/ACTIGWidgets/Info.plist
       properties:

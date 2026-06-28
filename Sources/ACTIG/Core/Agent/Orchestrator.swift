@@ -1,13 +1,17 @@
 import Foundation
 
-/// Drives agentic tasks: plan → act → observe, while writing workflow
-/// checkpoints (req 1: checkpoints), estimating duration (req 1.(2-4)), and
-/// producing the success/failure explanation (req 1.(2-3)).
+/// Drives agentic tasks: plan → act → observe. The brain may emit `<<TOOL>>`
+/// directives (see `ToolDirectiveParser`); the orchestrator executes them via
+/// the `ToolRegistry`, records each as a workflow checkpoint command with its
+/// result (req 1: checkpoints, how/why it succeeded/failed, ETA), and returns a
+/// natural reply plus any options/suggestions the brain produced.
 @MainActor
 final class Orchestrator {
     private let brain: LLMRouter
     private let history: HistoryStore
     private let device: DeviceController
+    /// Set once `AppState` exists so tools can drive the app/device.
+    var tools: ToolRegistry?
 
     init(brain: LLMRouter, history: HistoryStore, device: DeviceController) {
         self.brain = brain
@@ -15,8 +19,6 @@ final class Orchestrator {
         self.device = device
     }
 
-    /// Run a conversational/agentic task. Returns the reply plus any options and
-    /// suggestions the brain produced.
     func run(task: String, language: AppLanguage, context: [LLMMessage]) async -> AgentOutcome {
         let checkpoint = WorkflowCheckpoint(
             title: String(task.prefix(60)),
@@ -25,18 +27,33 @@ final class Orchestrator {
         )
         history.newCheckpoint(checkpoint)
 
-        var messages: [LLMMessage] = [.init(role: .system, content: PromptBuilder.system(language: language))]
+        var messages: [LLMMessage] = [.init(role: .system, content: systemPrompt(language: language))]
         messages.append(contentsOf: context)
         messages.append(.init(role: .user, content: task))
 
         do {
             let response = try await brain.complete(messages: messages, language: language)
+            let (clean, calls) = ToolDirectiveParser.parse(response.text)
+
+            // Execute any tool calls and gather their results.
+            var toolResults: [String] = []
+            for call in calls {
+                let result = await tools?.execute(call) ?? "Tools unavailable."
+                checkpoint.commands.append("\(call.name)(\(call.args))")
+                toolResults.append(result)
+            }
+
             checkpoint.status = .succeeded
-            checkpoint.result = response.text
-            checkpoint.explanation = "Completed via \(brain.preferLocal ? "on-device" : "hybrid") brain."
-            checkpoint.commands.append(task)
+            let reply = [clean, toolResults.joined(separator: " ")]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            checkpoint.result = reply
+            checkpoint.explanation = calls.isEmpty
+                ? "Answered via \(brain.preferLocal ? "on-device" : "hybrid") brain."
+                : "Ran \(calls.count) tool(s): \(calls.map(\.name).joined(separator: ", "))."
             history.update(checkpoint)
-            return AgentOutcome(reply: response.text,
+
+            return AgentOutcome(reply: reply.isEmpty ? response.text : reply,
                                 options: response.options,
                                 suggestions: response.suggestions)
         } catch {
@@ -45,19 +62,34 @@ final class Orchestrator {
             checkpoint.explanation = explanation
             checkpoint.result = error.localizedDescription
             history.update(checkpoint)
-            // Requirement 1.(2-1): explain errors to the user in their language.
             return AgentOutcome(reply: explanation, options: [], suggestions: [])
         }
     }
 
-    /// Naive ETA heuristic shown to the user (req 1.(2-4)). Replace with a
-    /// learned estimate once telemetry exists.
+    /// System prompt = persona/language contract + the live tool catalog so the
+    /// model knows what it can actually do on this device.
+    private func systemPrompt(language: AppLanguage) -> String {
+        var prompt = PromptBuilder.system(language: language)
+        if let catalog = tools?.catalogForPrompt, !catalog.isEmpty {
+            prompt += """
+
+
+            You can take actions on the device by emitting, on their own lines,
+            one or more directives of the form:
+            \(ToolDirectiveParser.marker){"name":"<tool>","args":{...}}
+            Emit a directive ONLY when the user clearly wants that action; keep a
+            short natural sentence above it. Available tools:
+            \(catalog)
+            """
+        }
+        return prompt
+    }
+
     private func estimateETA(for task: String) -> Double {
         let words = task.split(separator: " ").count
         return min(60, max(2, Double(words) * 0.4))
     }
 
-    /// Turns a raw error into a friendly, localized explanation.
     static func explainError(_ error: Error, language: AppLanguage) -> String {
         let detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         switch language {

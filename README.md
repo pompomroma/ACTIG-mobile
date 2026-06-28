@@ -39,8 +39,12 @@ Shortcuts/                  The "drop-in file" launcher (build instructions)
   (Simulator covers chat, history, HUD, and touch-based 3D.)
 - **Xcode 15+** to build.
 - **XcodeGen** (`brew install xcodegen`) to generate the project.
-- A **Claude API key** for the cloud brain (optional; the on-device engine is
-  the offline fallback).
+- A **Claude API key** for the cloud brain (optional). The offline brain is
+  real: Apple's on-device **Foundation Models** (iOS 26) via
+  `Core/Brain/FoundationModelsEngine.swift`, with an optional bundled MLX model
+  and a deterministic final fallback — so ACTIG answers with no network.
+- See `docs/ENTITLEMENTS.md` (capability setup), `docs/LIMITATIONS.md` (per-item
+  iOS limits + approximations), and `docs/AUTOMATIONS.md` (auto-launch setup).
 - An **Apple Developer account** ($99/yr) is required for Siri, widgets,
   app groups, background audio, and TestFlight. A free account allows 7-day
   sideloading with a reduced entitlement set.

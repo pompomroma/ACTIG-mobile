@@ -1,42 +1,46 @@
 import Foundation
 
-/// Hybrid brain. Prefers the cloud engine (Claude) for best quality when it's
-/// available, and falls back to the on-device engine for offline/fast replies —
-/// satisfying the "local agentic AI" goal with high fluency when online.
+/// Hybrid brain. Builds an ordered fallback chain and uses the first engine that
+/// succeeds, so the assistant always answers:
+///
+///   online  : Claude (best fluency) → Foundation Models → MLX/local → fallback
+///   offline : Foundation Models → MLX/local → fallback
+///
+/// `preferLocal` (privacy / no-network mode) skips the cloud entirely.
 final class LLMRouter: BrainEngine, @unchecked Sendable {
     private let cloud: BrainEngine
-    private let local: BrainEngine
+    /// On-device engines, in preference order (Apple Foundation Models first,
+    /// then the MLX/deterministic `LocalEngine`).
+    private let onDevice: [BrainEngine]
 
-    /// User preference: force-offline (privacy / no network) even if a key exists.
+    /// User preference: force-offline even if a Claude key exists.
     var preferLocal: Bool = false
 
-    init(cloud: BrainEngine = ClaudeClient(), local: BrainEngine = LocalEngine()) {
+    init(cloud: BrainEngine = ClaudeClient(),
+         onDevice: [BrainEngine] = [FoundationModelsEngine(), LocalEngine()]) {
         self.cloud = cloud
-        self.local = local
+        self.onDevice = onDevice
     }
 
-    var isAvailable: Bool { cloud.isAvailable || local.isAvailable }
+    var isAvailable: Bool { cloud.isAvailable || onDevice.contains { $0.isAvailable } }
 
     func complete(messages: [LLMMessage], language: AppLanguage) async throws -> LLMResponse {
-        let primary = chooseEngine()
-        do {
-            return try await primary.complete(messages: messages, language: language)
-        } catch {
-            // Graceful degradation: if the cloud call fails, never leave the user
-            // stranded — fall through to the always-available local engine.
-            if (primary as AnyObject) !== (local as AnyObject) {
-                return try await local.complete(messages: messages, language: language)
-            }
-            throw error
+        var lastError: Error = BrainError.noEngineAvailable
+        for engine in engineChain() where engine.isAvailable {
+            do { return try await engine.complete(messages: messages, language: language) }
+            catch { lastError = error } // try the next engine in the chain
         }
+        throw lastError
     }
 
     func stream(messages: [LLMMessage], language: AppLanguage) -> AsyncThrowingStream<String, Error> {
-        chooseEngine().stream(messages: messages, language: language)
+        let engine = engineChain().first { $0.isAvailable } ?? onDevice.last!
+        return engine.stream(messages: messages, language: language)
     }
 
-    private func chooseEngine() -> BrainEngine {
-        if preferLocal { return local }
-        return cloud.isAvailable ? cloud : local
+    /// Ordered list of engines to try for this request.
+    private func engineChain() -> [BrainEngine] {
+        if preferLocal { return onDevice }
+        return [cloud] + onDevice
     }
 }

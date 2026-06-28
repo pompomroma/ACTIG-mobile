@@ -41,11 +41,22 @@ the literal form) · 🔜 = scaffolded, needs device-side wiring/model.
 | 16 | Bring up 3D by voice or text | ✅ | `Intents.openStudio` in `CommandRouter`, `OpenStudioIntent` |
 | 17 | iPhone-matched 3D space | ✅ | `ProjectSpaceView` (RealityKit, portrait + landscape) |
 | 18 | Play requested music by voice/text/web | ✅ | `DeviceController.playMusic`, `MusicController` |
-| 19 | Access to apps/settings/info/actions | 🟡 | `DeviceController` (URL schemes, Settings deep-links, permissioned data); full access needs jailbreak (out of scope) |
+| 19 | Access to apps/settings/info/actions | 🟡 | `Device/AppLauncher.swift` (app launch + Settings panes), `Device/PersonalDataController.swift` (EventKit/Contacts/Health), all wired as agent tools; full arbitrary access needs jailbreak (out of scope, see `LIMITATIONS.md`) |
 
-## On-device model (🔜)
+## Production status of the previously-incomplete pieces
 
-`Core/Brain/LocalEngine.swift` ships with a deterministic offline fallback so the
-whole app runs today. To enable a real local model: add `MLXSwift` in
-`project.yml`, bundle quantized weights, and implement the `generate(_:)` MLX
-path. The cloud brain (`ClaudeClient`) already provides full fluency when online.
+- **On-device offline brain (now ✅):** `Core/Brain/FoundationModelsEngine.swift`
+  uses Apple's on-device Foundation Models (iOS 26) — real, free, offline.
+  `LLMRouter` chains Claude (online) → Foundation Models → MLX/`LocalEngine`
+  fallback. Optional custom MLX model documented in `ENTITLEMENTS.md`.
+- **Agentic actions (now ✅):** `Core/Agent/Tools.swift` + the upgraded
+  `Core/Agent/Orchestrator.swift` let the brain actually *do* things (open apps,
+  play music, reminders/calendar/contacts/health, drive the 3D studio) by both
+  voice and text, each logged as a workflow checkpoint.
+- **Always-on / always-present (🟡 maximized):** `Core/Background/BackgroundCoordinator.swift`
+  (BGTasks), `Core/Push/PushManager.swift` (push/local wake), and
+  `Core/Live/LiveActivityManager.swift` + `Sources/ACTIGWidgets/ACTIGLiveActivity.swift`
+  (Dynamic Island / Lock Screen). Hard OS limits documented in `LIMITATIONS.md`.
+
+See `docs/LIMITATIONS.md` for the per-item reasons the 🟡 items can't be 100%,
+`docs/ENTITLEMENTS.md` for capability setup, and `docs/AUTOMATIONS.md` for launch.

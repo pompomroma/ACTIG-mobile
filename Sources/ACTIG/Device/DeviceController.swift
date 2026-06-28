@@ -3,12 +3,13 @@ import UIKit
 
 /// Sanctioned device/cross-app control (req 18 & 19). iOS forbids true "access
 /// to everything", so this exposes the *allowed* surface: launching apps and
-/// deep actions via URL schemes / x-callback-url, opening Settings panes, and
-/// playing music. Permission-gated data (Contacts/Calendar/etc.) is added here
-/// behind the system permission prompts.
+/// deep actions via URL schemes / x-callback-url, opening Settings panes,
+/// playing music, and permission-gated personal data via `PersonalDataController`.
+/// The hard limits are documented in docs/LIMITATIONS.md.
 @MainActor
 final class DeviceController {
     private let music = MusicController()
+    let personal = PersonalDataController()
 
     /// Play a track/playlist the user requested (req 18). Tries Apple Music via
     /// MusicKit first, then falls back to deep-linking Spotify / a web search.
@@ -19,20 +20,20 @@ final class DeviceController {
         return openURL(webSearchURL("play \(query)"))
     }
 
-    /// Launch another app by its URL scheme (req 19, the allowed form of "open
-    /// any installed app"). Returns false if the scheme isn't installed.
-    @discardableResult
-    func launchApp(scheme: String) -> Bool {
-        guard let url = URL(string: scheme) else { return false }
-        return openURL(url)
-    }
+    func pauseMusic() { music.pause() }
+    func skipMusic() { music.skip() }
 
-    /// Open a specific Settings pane (req 19: settings access, within limits).
+    /// Launch another app by friendly name (req 19, allowed form of "open any app").
     @discardableResult
-    func openSettings(pane: String = UIApplication.openSettingsURLString) -> Bool {
-        guard let url = URL(string: pane) else { return false }
-        return openURL(url)
-    }
+    func launchApp(named name: String) -> Bool { AppLauncher.openApp(named: name) }
+
+    /// Launch by raw scheme/URL.
+    @discardableResult
+    func launchApp(scheme: String) -> Bool { AppLauncher.openURL(scheme) }
+
+    /// Open a Settings pane by friendly name (e.g. "wifi"), or ACTIG's settings.
+    @discardableResult
+    func openSettings(pane: String? = nil) -> Bool { AppLauncher.openSettings(pane: pane) }
 
     // MARK: helpers
 
