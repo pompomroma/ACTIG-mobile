@@ -23,18 +23,40 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build & test
+      - name: Show toolchain & pick a simulator
+        id: sim
         run: |
+          set -euo pipefail
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+          # Pick the first available iPhone simulator so we don't hard-code a
+          # device name that may not exist on this runner's Xcode.
+          DEVICE=$(xcrun simctl list devices available | grep -Eo 'iPhone [0-9][^(]*' | head -1 | sed 's/ *$//')
+          echo "Using simulator: '$DEVICE'"
+          echo "device=$DEVICE" >> "$GITHUB_OUTPUT"
+
+      - name: Build (compile gate)
+        run: |
+          set -euo pipefail
+          # Generic Simulator destination compiles every target/arch without
+          # needing a booted device — this is the real compile gate. No xcpretty
+          # so xcodebuild's true exit status is what fails the job.
           xcodebuild \
             -project ACTIG.xcodeproj \
             -scheme ACTIG \
-            -destination 'platform=iOS Simulator,name=iPhone 15 Pro Max' \
+            -destination 'generic/platform=iOS Simulator' \
             -skipPackagePluginValidation \
-            clean test | xcpretty || xcodebuild \
+            clean build
+
+      - name: Test
+        run: |
+          set -euo pipefail
+          xcodebuild \
             -project ACTIG.xcodeproj \
             -scheme ACTIG \
-            -destination 'platform=iOS Simulator,name=iPhone 15 Pro Max' \
-            clean test
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+            -skipPackagePluginValidation \
+            test
 
   testflight:
     name: Archive & TestFlight
