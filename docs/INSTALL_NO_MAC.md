@@ -67,16 +67,19 @@ and **no GitHub settings**.
 A free CDN (raw.githack.com) serves the app straight from the repo — nothing to
 enable.
 
-1. In **Safari**, open:
-   **https://raw.githack.com/pompomroma/ACTIG-mobile/main/web/index.html**
-   (or, pinned to a known-good build:
-   `https://raw.githack.com/pompomroma/ACTIG-mobile/<commit-sha>/web/index.html`).
+1. In **Safari**, open this known-good build:
+   **https://raw.githack.com/pompomroma/ACTIG-mobile/d2e3dd9eeae9e0d1602a3bbc1d573de3743ba205/web/index.html**
 2. Tap **Share → Add to Home Screen → Add**.
 3. Launch **ACTIG** from the Home Screen (full-screen, offline-capable after first load).
 4. Optional: in **Settings**, paste a **Claude API key** for the smartest replies.
 
 Alternative CDN (also zero setup): jsDelivr —
-`https://cdn.jsdelivr.net/gh/pompomroma/ACTIG-mobile@<commit-sha>/web/index.html`.
+`https://cdn.jsdelivr.net/gh/pompomroma/ACTIG-mobile@d2e3dd9eeae9e0d1602a3bbc1d573de3743ba205/web/index.html`.
+
+> The long string is a **commit hash** (not a typo). The working branch name
+> contains `/` characters, which these CDNs can't parse, so we pin to a commit
+> instead. To install a newer build later, swap in a newer commit hash from the
+> repo's commit list, or use the permanent github.io URL after enabling Pages.
 
 ### Nicer permanent URL (optional, one owner toggle)
 For a clean `https://pompomroma.github.io/ACTIG-mobile/` address, the repo owner

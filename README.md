@@ -65,8 +65,9 @@ in the Keychain, never in source.
 
 Zero setup, no GitHub settings: open this in **Safari → Share → Add to Home
 Screen** —
-**https://raw.githack.com/pompomroma/ACTIG-mobile/main/web/index.html**
-(served straight from the repo by a free CDN). No PC, no Apple account, no
+**https://raw.githack.com/pompomroma/ACTIG-mobile/d2e3dd9eeae9e0d1602a3bbc1d573de3743ba205/web/index.html**
+(served straight from the repo by a free CDN; the long code is a commit hash, used
+because the working branch name contains slashes that CDNs can't parse). No PC, no Apple account, no
 signing. Covers chat, voice in/out, wake word, language switch, the 3D studio,
 and history; native-only features (Siri, widgets, HealthKit, Apple's on-device
 model) need the native app. For a permanent `github.io` URL, the owner can enable
