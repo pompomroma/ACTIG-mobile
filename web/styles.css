@@ -1,0 +1,62 @@
+:root{
+  --bg:#05080c; --panel:rgba(69,199,255,.10); --line:rgba(69,199,255,.55);
+  --primary:#45c7ff; --accent:#8be4ff; --danger:#ff5258; --text:#e8f6ff;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  overscroll-behavior:none}
+#app{display:flex;flex-direction:column;height:100dvh;
+  padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.topbar{display:flex;justify-content:space-between;align-items:center;
+  padding:10px 16px;border-bottom:1px solid var(--line)}
+.brand{color:var(--primary);font-weight:700;letter-spacing:1px}
+.status{font-size:12px;color:var(--accent);opacity:.8}
+
+.tab{display:none;flex:1;overflow:auto;min-height:0}
+.tab.active{display:flex;flex-direction:column}
+
+.transcript{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+.bubble{max-width:85%;padding:10px 12px;border-radius:14px;line-height:1.35;
+  white-space:pre-wrap;word-wrap:break-word}
+.user{align-self:flex-end;background:var(--accent);color:#021018}
+.ai{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
+.sys{align-self:center;font-size:12px;color:var(--accent);opacity:.8}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.chips .opt{font-size:12px;padding:5px 9px;border-radius:20px;background:var(--panel);
+  border:1px solid var(--line);color:var(--text);cursor:pointer}
+
+.studio-host{flex:1;min-height:0;position:relative}
+.studio-host canvas{width:100%!important;height:100%!important;display:block;touch-action:none}
+.studio-bar{display:flex;gap:6px;overflow-x:auto;padding:8px;border-top:1px solid var(--line)}
+.chip{flex:0 0 auto;background:var(--panel);border:1px solid var(--line);color:var(--text);
+  padding:8px 10px;border-radius:10px;font-size:13px;cursor:pointer}
+.chip.danger{border-color:var(--danger);color:var(--danger)}
+.chip.on{background:var(--primary);color:#021018}
+
+.settings{padding:16px;display:flex;flex-direction:column;gap:12px;overflow:auto}
+.settings h3{margin:8px 0 0;color:var(--primary)}
+.settings label{display:flex;flex-direction:column;gap:6px;font-size:14px}
+.settings input[type=password],.settings input[type=text]{
+  padding:10px;border-radius:10px;border:1px solid var(--line);
+  background:rgba(0,0,0,.3);color:var(--text)}
+.muted{color:var(--accent);opacity:.75;font-size:13px;line-height:1.4}
+
+.hud{position:fixed;right:12px;bottom:140px;display:flex;flex-direction:column;gap:10px;z-index:5}
+.holo{width:52px;height:52px;border-radius:50%;border:1.5px solid var(--line);
+  background:rgba(8,16,24,.7);color:var(--primary);font-size:20px;
+  box-shadow:0 0 14px rgba(69,199,255,.5);backdrop-filter:blur(6px)}
+.holo.accent{color:var(--accent);border-color:var(--accent)}
+.holo.danger{color:var(--danger);border-color:var(--danger)}
+.holo.muted-on{opacity:.45}
+
+.inputbar{display:flex;gap:8px;padding:8px 12px;border-top:1px solid var(--line)}
+.inputbar input{flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);
+  background:rgba(0,0,0,.3);color:var(--text)}
+.inputbar .holo{width:46px;height:46px;font-size:18px}
+
+.tabs{display:flex;border-top:1px solid var(--line)}
+.tabs button{flex:1;padding:12px;background:transparent;border:0;color:var(--text);
+  opacity:.6;font-size:14px}
+.tabs button.active{opacity:1;color:var(--primary);box-shadow:inset 0 2px 0 var(--primary)}
+button{cursor:pointer}

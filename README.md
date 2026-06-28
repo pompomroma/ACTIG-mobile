@@ -61,7 +61,15 @@ Set your Claude API key at runtime (Settings tab in-app) or via the
 `ACTIG_CLAUDE_API_KEY` environment variable in the run scheme. Keys are stored
 in the Keychain, never in source.
 
-### No Mac / no Xcode / no paid account? (this is the main path)
+### No computer at all? Install the web app (PWA) — only your iPhone
+
+Open **https://pompomroma.github.io/ACTIG-mobile/** in **Safari → Share → Add to
+Home Screen**. No PC, no Apple account, no signing. Covers chat, voice in/out,
+wake word, language switch, the 3D studio, and history; native-only features
+(Siri, widgets, HealthKit, Apple's on-device model) need the native app. Built
+from `web/` and deployed by `.github/workflows/pages.yml`.
+
+### No Mac / no Xcode / no paid account? (native, free)
 
 CI builds everything in the cloud. The **free** path needs only a normal Apple ID
 — **no Xcode, no Mac, no App Store Connect, no $99 membership.** Full steps in

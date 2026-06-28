@@ -1,0 +1,240 @@
+/* ACTIG PWA — installable from Safari (no PC/account/signing needed).
+   Covers the browser-feasible subset: holographic chat, voice in/out, wake word,
+   language switching, command routing, history, and the 3D studio. Native-only
+   features (Siri, widgets, HealthKit, Apple on-device model) are out of a browser
+   sandbox and live in the native app. */
+
+const WAKE = "wake up actig";
+const REACTION = "ACTIG at your service sir";
+const MODEL = "claude-opus-4-8";
+
+const $ = (id) => document.getElementById(id);
+const store = {
+  get key() { return localStorage.getItem("actig.key") || ""; },
+  set key(v) { localStorage.setItem("actig.key", v); },
+  get offline() { return localStorage.getItem("actig.offline") === "1"; },
+  set offline(v) { localStorage.setItem("actig.offline", v ? "1" : "0"); },
+  get history() { try { return JSON.parse(localStorage.getItem("actig.history") || "[]"); } catch { return []; } },
+  set history(v) { localStorage.setItem("actig.history", JSON.stringify(v.slice(-400))); },
+};
+
+let messages = store.history;        // {role, text, options?, suggestions?}
+let aiMuted = false, userMuted = false, speaking = false;
+
+/* ---------- language ---------- */
+function detectLang(t) {
+  if (/[가-힣]/.test(t)) return "ko-KR";
+  if (/[぀-ヿ]/.test(t)) return "ja-JP";
+  if (/[一-鿿]/.test(t)) return "zh-CN";
+  if (/[à-ÿ]/.test(t) && /\b(le|la|une?|est|je)\b/i.test(t)) return "fr-FR";
+  return "en-US";
+}
+
+/* ---------- text to speech ---------- */
+function speak(text, lang) {
+  if (aiMuted || !("speechSynthesis" in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = lang || "en-US";
+  u.onstart = () => { speaking = true; };
+  u.onend = () => { speaking = false; };
+  speechSynthesis.speak(u);
+}
+
+/* ---------- speech recognition (wake word + dictation) ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let wakeRec = null, dictRec = null;
+
+function startWakeWord() {
+  if (!SR) { setStatus('Tap ⚡ or 🎤 to talk (voice wake unsupported here)'); return; }
+  try {
+    wakeRec = new SR();
+    wakeRec.continuous = true; wakeRec.interimResults = true; wakeRec.lang = "en-US";
+    wakeRec.onresult = (e) => {
+      const heard = Array.from(e.results).map(r => r[0].transcript).join(" ").toLowerCase();
+      if (heard.includes(WAKE)) { wake(); }
+    };
+    wakeRec.onerror = () => {};
+    wakeRec.onend = () => { if (!userMuted) { try { wakeRec.start(); } catch {} } };
+    wakeRec.start();
+    setStatus('Listening for “wake up ACTIG”');
+  } catch { setStatus('Tap ⚡ or 🎤 to talk'); }
+}
+
+function dictateOnce() {
+  if (userMuted) return;
+  if (!SR) { $("draft").focus(); return; }
+  if (speaking) speechSynthesis.cancel();          // barge-in
+  try {
+    dictRec = new SR();
+    dictRec.lang = "en-US"; dictRec.interimResults = false; dictRec.continuous = false;
+    dictRec.onresult = (e) => {
+      const text = e.results[0][0].transcript.trim();
+      if (text) submit(text, "voice");
+    };
+    dictRec.start();
+    setStatus("Listening…");
+  } catch { $("draft").focus(); }
+}
+
+function wake() {
+  setStatus("Awake");
+  speak(REACTION, "en-US");
+  addBubble("sys", REACTION);
+  setTimeout(dictateOnce, 900);
+}
+
+/* ---------- brain ---------- */
+function systemPrompt(lang) {
+  return `You are ACTIG, a witty, warm JARVIS-style assistant. Reply naturally in ${lang}. `
+    + `When useful, end with:\n<<OPTIONS>>\n- option\n<<SUGGESTIONS>>\n- recommendation`;
+}
+
+async function callClaude(history, lang) {
+  const key = store.key;
+  if (!key || store.offline) return offlineReply(lang);
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({
+        model: MODEL, max_tokens: 1024, system: systemPrompt(lang),
+        messages: history.filter(m => m.role !== "sys")
+          .map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })),
+      }),
+    });
+    if (!res.ok) return `(${res.status}) ` + (await res.text()).slice(0, 200);
+    const data = await res.json();
+    return (data.content || []).map(c => c.text || "").join("");
+  } catch (e) { return offlineReply(lang) + ` (network: ${e.message})`; }
+}
+
+function offlineReply(lang) {
+  const m = {
+    "ko-KR": "오프라인 모드예요. 설정에서 Claude API 키를 넣으면 정확히 답할 수 있어요.",
+    "ja-JP": "オフラインです。設定でClaude APIキーを入れると正確に答えられます。",
+    "zh-CN": "当前离线。在设置中填入 Claude API 密钥后我能准确回答。",
+    "en-US": "I'm offline right now, sir. Add a Claude API key in Settings and I'll answer with full accuracy.",
+  };
+  return m[lang] || m["en-US"];
+}
+
+function parseStructured(raw) {
+  const out = { text: raw, options: [], suggestions: [] };
+  const oi = raw.indexOf("<<OPTIONS>>"), si = raw.indexOf("<<SUGGESTIONS>>");
+  if (oi < 0 && si < 0) return out;
+  const cut = Math.min(...[oi, si].filter(i => i >= 0));
+  out.text = raw.slice(0, cut).trim();
+  const list = (from, to) => raw.slice(from, to < 0 ? undefined : to)
+    .split("\n").map(s => s.trim()).filter(s => s.startsWith("-")).map(s => s.slice(1).trim());
+  if (oi >= 0) out.options = list(oi + 11, si);
+  if (si >= 0) out.suggestions = list(si + 15, -1);
+  return out;
+}
+
+/* ---------- command routing ---------- */
+async function submit(text, source) {
+  const lang = detectLang(text);
+  addBubble("user", text);
+  messages.push({ role: "user", text }); persist();
+
+  const low = text.toLowerCase();
+  // deterministic intents (work offline, no key needed)
+  if (/(3d|three d).*(project|space|studio)|open studio|3d 프로젝트|3dプロジェクト/.test(low)) {
+    switchTab("studio"); return finish("Opening the 3D project space.", lang, source);
+  }
+  if (/^\s*(play |put on |음악 틀어|노래 틀어|播放)/.test(low)) {
+    const q = text.replace(/^.*?(play |put on |음악 틀어|노래 틀어|播放)/i, "").trim() || text;
+    window.open("https://music.apple.com/search?term=" + encodeURIComponent(q), "_blank");
+    return finish(`Searching music for “${q}”.`, lang, source);
+  }
+  if (/(mute).*(me|mic)|음소거/.test(low)) { setUserMuted(true); return finish("Your mic is muted.", lang, source); }
+  if (/(be quiet|mute (yourself|ai)|stop talking|조용히)/.test(low)) { setAIMuted(true); return finish("Voice muted.", lang, source); }
+
+  // LLM brain
+  setStatus("Thinking…");
+  const raw = await callClaude(messages, lang);
+  const { text: reply, options, suggestions } = parseStructured(raw);
+  addBubble("ai", reply, options, suggestions);
+  messages.push({ role: "assistant", text: reply, options, suggestions }); persist();
+  setStatus("Ready");
+  if (source === "voice") speak(reply, lang);
+}
+
+function finish(reply, lang, source) {
+  addBubble("ai", reply);
+  messages.push({ role: "assistant", text: reply }); persist();
+  if (source === "voice") speak(reply, lang);
+}
+
+/* ---------- UI ---------- */
+function addBubble(kind, text, options = [], suggestions = []) {
+  const t = $("transcript");
+  const b = document.createElement("div");
+  b.className = "bubble " + (kind === "user" ? "user" : kind === "sys" ? "sys" : "ai");
+  b.textContent = text;
+  if (options.length || suggestions.length) {
+    const wrap = document.createElement("div"); wrap.className = "chips";
+    [...options, ...suggestions].forEach(o => {
+      const c = document.createElement("span"); c.className = "opt"; c.textContent = o;
+      c.onclick = () => submit(o, "text"); wrap.appendChild(c);
+    });
+    b.appendChild(wrap);
+  }
+  t.appendChild(b); t.scrollTop = t.scrollHeight;
+}
+function persist() { store.history = messages; }
+function setStatus(s) { $("status").textContent = s; }
+function setUserMuted(v) { userMuted = v; $("micUser").classList.toggle("muted-on", v); if (v && wakeRec) try { wakeRec.stop(); } catch {} else startWakeWord(); }
+function setAIMuted(v) { aiMuted = v; $("micAI").classList.toggle("muted-on", v); if (v) speechSynthesis.cancel(); }
+
+function switchTab(name) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  $("tab-" + name).classList.add("active");
+  if (name === "studio") ensureStudio();
+}
+
+/* ---------- 3D studio (lazy) ---------- */
+let studio = null;
+async function ensureStudio() {
+  if (studio) return;
+  try {
+    const mod = await import("./studio.js");
+    studio = await mod.createStudio($("studio-host"));
+  } catch (e) { addBubble("sys", "3D studio needs a network connection the first time."); }
+}
+
+/* ---------- wiring ---------- */
+function boot() {
+  // restore transcript
+  messages.forEach(m => addBubble(m.role === "user" ? "user" : "ai", m.text, m.options, m.suggestions));
+  // settings
+  $("apiKey").value = store.key; $("preferOffline").checked = store.offline;
+  $("saveKey").onclick = () => { store.key = $("apiKey").value.trim(); store.offline = $("preferOffline").checked; setStatus("Saved"); };
+  $("clearHistory").onclick = () => { messages = []; persist(); $("transcript").innerHTML = ""; };
+  // input
+  $("send").onclick = send; $("draft").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
+  function send() { const v = $("draft").value.trim(); if (!v) return; $("draft").value = ""; submit(v, "text"); }
+  // HUD
+  $("emergency").onclick = wake;
+  $("micUser").onclick = () => { if (userMuted) setUserMuted(false); else dictateOnce(); };
+  $("micAI").onclick = () => setAIMuted(!aiMuted);
+  $("open3d").onclick = () => switchTab("studio");
+  // tabs
+  document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+  // studio buttons
+  document.querySelectorAll("[data-shape]").forEach(b => b.onclick = () => { ensureStudio().then(() => studio?.spawn(b.dataset.shape)); });
+  $("clone").onclick = () => studio?.clone();
+  $("del").onclick = () => studio?.remove();
+  $("gesture").onclick = (e) => { ensureStudio().then(() => { const on = studio?.toggleGestures(); e.target.classList.toggle("on", on); }); };
+
+  startWakeWord();
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+document.addEventListener("DOMContentLoaded", boot);

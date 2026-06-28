@@ -58,16 +58,36 @@ signs in the cloud and uploads to TestFlight; install via the TestFlight app.
 
 ---
 
-## "I have no computer at all"
+## Path C (no computer at all, no account) — install the WEB APP (PWA)
 
-iOS still requires a trusted signer, and the easy computer-free options don't fit
-this device:
-- **TrollStore** (permanent, no computer, no account) only works on iOS 14–16.x
-  (some 17.0). An iPhone 14 Pro Max on iOS 26 is **not** supported.
-- **AltStore PAL** (alternative marketplace, install over the air) is **EU-only**,
-  iOS 17.4+. If you're in the EU this can work without a computer.
+This needs **only your iPhone and Safari**. No computer, no Apple ID, no signing.
 
-Otherwise you need a computer **once** (a friend's Windows PC is enough) to do the
-initial AltStore/SideStore pairing. After that, SideStore refreshes on-device.
-There is no fully on-phone install for a full native app on iOS 26 outside the EU
-— that's an Apple restriction, not a gap in ACTIG (see `LIMITATIONS.md`).
+1. Open **https://pompomroma.github.io/ACTIG-mobile/** in **Safari**.
+2. Tap the **Share** button → **Add to Home Screen** → **Add**.
+3. Launch **ACTIG** from your Home Screen — it runs full-screen like an app and
+   works offline after the first load.
+4. In the app's **Settings**, paste a **Claude API key** for the smartest replies
+   (optional; basic offline replies work without it).
+
+**What works in the PWA:** holographic chat, **voice in & out**, the wake phrase
+"wake up ACTIG" → "ACTIG at your service sir" (where the browser supports
+speech recognition), language auto-switch, the **3D studio** (spawn / drag /
+scale / clone shapes, plus optional camera hand-gestures), and saved history.
+
+**What's native-only** (a browser can't do these): Siri, Home-Screen widgets,
+Control Center, HealthKit, Apple's on-device model, and launching other apps.
+For those, use Path A (TestFlight) or Path B (sideload) with a computer/account.
+
+> First deploy: a repo admin enables Pages once — repo **Settings → Pages →
+> Build and deployment → Source: GitHub Actions** (doable from Safari). After
+> that the URL above is live and updates on every push.
+
+## Native, no computer (regional / paid options)
+- **TrollStore** (permanent, no computer/account) only works on iOS 14–16.x
+  (some 17.0). iPhone 14 Pro Max on iOS 26 is **not** supported.
+- **AltStore PAL** (alt marketplace, over-the-air) is **EU-only**, iOS 17.4+.
+- **$99 TestFlight** (Path A) is fully drivable from Safari + the TestFlight app —
+  no computer — if you ever get the paid account.
+
+For a full *native* app with none of those, you need a computer **once** for the
+AltStore/SideStore pairing — an Apple restriction, not a gap in ACTIG.

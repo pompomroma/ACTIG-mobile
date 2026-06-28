@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <title>ACTIG</title>
+  <meta name="theme-color" content="#05080c" />
+  <!-- iOS: install to Home Screen as a full-screen app -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ACTIG" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <span class="brand">◇ ACTIG</span>
+      <span id="status" class="status">Idle</span>
+    </header>
+
+    <!-- CHAT -->
+    <section id="tab-chat" class="tab active">
+      <div id="transcript" class="transcript"></div>
+    </section>
+
+    <!-- 3D STUDIO -->
+    <section id="tab-studio" class="tab">
+      <div id="studio-host" class="studio-host"></div>
+      <div class="studio-bar">
+        <button data-shape="box" class="chip">＋Box</button>
+        <button data-shape="sphere" class="chip">＋Sphere</button>
+        <button data-shape="cylinder" class="chip">＋Cyl</button>
+        <button data-shape="cone" class="chip">＋Cone</button>
+        <button data-shape="torus" class="chip">＋Torus</button>
+        <button id="clone" class="chip">Clone</button>
+        <button id="del" class="chip danger">Delete</button>
+        <button id="gesture" class="chip">✋ Gestures</button>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="tab-settings" class="tab">
+      <div class="settings">
+        <h3>AI brain</h3>
+        <label>Claude API key (stored only on this device)
+          <input id="apiKey" type="password" placeholder="sk-ant-..." autocomplete="off" />
+        </label>
+        <label><input id="preferOffline" type="checkbox" /> Prefer offline (no cloud)</label>
+        <button id="saveKey" class="chip">Save</button>
+        <h3>Wake & reaction</h3>
+        <p class="muted">Wake phrase: “wake up ACTIG” · Reaction: “ACTIG at your service sir”</p>
+        <h3>What the web app can/can't do</h3>
+        <p class="muted">Works with no PC/account: chat, voice in/out, wake word,
+        language switch, 3D studio, history. Native-only (not in a browser):
+        Siri, widgets, HealthKit, Apple's on-device model, launching other apps.</p>
+        <button id="clearHistory" class="chip danger">Clear history</button>
+      </div>
+    </section>
+
+    <!-- Holographic HUD -->
+    <div class="hud">
+      <button id="emergency" class="holo danger" title="Emergency wake">⚡</button>
+      <button id="micUser" class="holo" title="Mic">🎤</button>
+      <button id="micAI" class="holo" title="ACTIG voice">🔊</button>
+      <button id="open3d" class="holo accent" title="3D project">⬢</button>
+    </div>
+
+    <!-- Input bar -->
+    <div class="inputbar">
+      <input id="draft" type="text" placeholder="Message ACTIG…" />
+      <button id="send" class="holo accent">▲</button>
+    </div>
+
+    <!-- Tab switcher -->
+    <nav class="tabs">
+      <button data-tab="chat" class="active">Chat</button>
+      <button data-tab="studio">3D</button>
+      <button data-tab="settings">Settings</button>
+    </nav>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
