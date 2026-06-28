@@ -5,10 +5,11 @@ name: Deploy PWA (GitHub Pages)
 # Apple account, no signing. URL after first deploy:
 #   https://pompomroma.github.io/ACTIG-mobile/
 
+# Runs only when triggered manually (Actions tab -> Deploy PWA -> Run workflow),
+# AFTER the owner has enabled Pages once (Settings -> Pages -> Source: GitHub
+# Actions). This avoids a red failure on every push while Pages is off. Until
+# then, install instantly via the CDN URL in docs/INSTALL_NO_MAC.md (no setup).
 on:
-  push:
-    branches: ["claude/iphone-local-agentic-ai-nj6xr4", "main"]
-    paths: ["web/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:

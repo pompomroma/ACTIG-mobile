@@ -63,11 +63,15 @@ in the Keychain, never in source.
 
 ### No computer at all? Install the web app (PWA) — only your iPhone
 
-Open **https://pompomroma.github.io/ACTIG-mobile/** in **Safari → Share → Add to
-Home Screen**. No PC, no Apple account, no signing. Covers chat, voice in/out,
-wake word, language switch, the 3D studio, and history; native-only features
-(Siri, widgets, HealthKit, Apple's on-device model) need the native app. Built
-from `web/` and deployed by `.github/workflows/pages.yml`.
+Zero setup, no GitHub settings: open this in **Safari → Share → Add to Home
+Screen** —
+**https://raw.githack.com/pompomroma/ACTIG-mobile/main/web/index.html**
+(served straight from the repo by a free CDN). No PC, no Apple account, no
+signing. Covers chat, voice in/out, wake word, language switch, the 3D studio,
+and history; native-only features (Siri, widgets, HealthKit, Apple's on-device
+model) need the native app. For a permanent `github.io` URL, the owner can enable
+Pages once and run `.github/workflows/pages.yml` — details in
+[`docs/INSTALL_NO_MAC.md`](docs/INSTALL_NO_MAC.md).
 
 ### No Mac / no Xcode / no paid account? (native, free)
 

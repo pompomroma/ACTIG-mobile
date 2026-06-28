@@ -60,14 +60,29 @@ signs in the cloud and uploads to TestFlight; install via the TestFlight app.
 
 ## Path C (no computer at all, no account) — install the WEB APP (PWA)
 
-This needs **only your iPhone and Safari**. No computer, no Apple ID, no signing.
+This needs **only your iPhone and Safari**. No computer, no Apple ID, no signing,
+and **no GitHub settings**.
 
-1. Open **https://pompomroma.github.io/ACTIG-mobile/** in **Safari**.
-2. Tap the **Share** button → **Add to Home Screen** → **Add**.
-3. Launch **ACTIG** from your Home Screen — it runs full-screen like an app and
-   works offline after the first load.
-4. In the app's **Settings**, paste a **Claude API key** for the smartest replies
-   (optional; basic offline replies work without it).
+### Quickest: install from the CDN URL (zero setup, works immediately)
+A free CDN (raw.githack.com) serves the app straight from the repo — nothing to
+enable.
+
+1. In **Safari**, open:
+   **https://raw.githack.com/pompomroma/ACTIG-mobile/main/web/index.html**
+   (or, pinned to a known-good build:
+   `https://raw.githack.com/pompomroma/ACTIG-mobile/<commit-sha>/web/index.html`).
+2. Tap **Share → Add to Home Screen → Add**.
+3. Launch **ACTIG** from the Home Screen (full-screen, offline-capable after first load).
+4. Optional: in **Settings**, paste a **Claude API key** for the smartest replies.
+
+Alternative CDN (also zero setup): jsDelivr —
+`https://cdn.jsdelivr.net/gh/pompomroma/ACTIG-mobile@<commit-sha>/web/index.html`.
+
+### Nicer permanent URL (optional, one owner toggle)
+For a clean `https://pompomroma.github.io/ACTIG-mobile/` address, the repo owner
+enables Pages once: repo **Settings → Pages → Build and deployment → Source:
+GitHub Actions** (doable in Safari), then **Actions → Deploy PWA → Run workflow**.
+GitHub blocks automation from enabling Pages itself, so this step is owner-only.
 
 **What works in the PWA:** holographic chat, **voice in & out**, the wake phrase
 "wake up ACTIG" → "ACTIG at your service sir" (where the browser supports
