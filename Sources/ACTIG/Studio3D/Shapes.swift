@@ -28,7 +28,8 @@ enum ShapeKind: String, CaseIterable, Identifiable {
         case .sphere: .generateSphere(radius: 0.06)
         case .cylinder: .generateCylinder(height: 0.12, radius: 0.05)
         case .cone: .generateCone(height: 0.12, radius: 0.05)
-        case .capsule: .generateCapsule(height: 0.14, radius: 0.04)
+        // RealityKit has no capsule generator; approximate with a slim cylinder.
+        case .capsule: .generateCylinder(height: 0.14, radius: 0.04)
         case .plane: .generatePlane(width: 0.12, depth: 0.12)
         case .torusApprox: .generateSphere(radius: 0.07) // torus not built-in; placeholder
         }

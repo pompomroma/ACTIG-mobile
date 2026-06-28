@@ -35,7 +35,7 @@ Shortcuts/                  The "drop-in file" launcher (build instructions)
 
 ## Requirements
 
-- iPhone 14 Pro Max (A16, LiDAR) on **iOS 17+** for the full feature set.
+- iPhone 14 Pro Max (A16, LiDAR) on **iOS 18+** for the full feature set.
   (Simulator covers chat, history, HUD, and touch-based 3D.)
 - **Xcode 15+** to build.
 - **XcodeGen** (`brew install xcodegen`) to generate the project.

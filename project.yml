@@ -9,7 +9,7 @@ name: ACTIG
 options:
   bundleIdPrefix: com.actig
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "18.0"
   developmentLanguage: en
   createIntermediateGroups: true
   groupSortPosition: top
