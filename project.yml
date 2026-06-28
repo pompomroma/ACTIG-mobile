@@ -1,0 +1,128 @@
+# XcodeGen spec for ACTIG.
+# Generate the Xcode project with:  xcodegen generate
+# (install XcodeGen: `brew install xcodegen`)
+#
+# This keeps a hand-editable, diff-friendly project definition in source
+# control instead of the opaque .xcodeproj bundle.
+
+name: ACTIG
+options:
+  bundleIdPrefix: com.actig
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: "" # set your Apple Developer Team ID, or use Secrets.xcconfig
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_STRICT_CONCURRENCY: targeted
+
+packages:
+  # On-device LLM. Optional at first build; the LocalEngine has a stub fallback
+  # so the project compiles even before you add the dependency in Xcode.
+  # Uncomment to wire MLX in:
+  # MLXSwift:
+  #   url: https://github.com/ml-explore/mlx-swift-examples
+  #   from: "1.0.0"
+
+targets:
+  ACTIG:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/ACTIG
+    resources:
+      - path: Resources
+        optional: true
+    info:
+      path: Sources/ACTIG/Support/Info.plist
+      properties:
+        CFBundleDisplayName: ACTIG
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        # Permission usage strings (required or the app crashes on first use)
+        NSMicrophoneUsageDescription: "ACTIG listens for your wake word and voice commands."
+        NSSpeechRecognitionUsageDescription: "ACTIG transcribes your speech to understand commands."
+        NSCameraUsageDescription: "ACTIG uses the camera to track hand gestures for the 3D workspace."
+        NSAppleMusicUsageDescription: "ACTIG plays the music you request."
+        NSContactsUsageDescription: "ACTIG can look up and act on your contacts when you ask."
+        NSCalendarsUsageDescription: "ACTIG can read and create calendar events when you ask."
+        NSRemindersUsageDescription: "ACTIG can manage reminders when you ask."
+        NSPhotoLibraryUsageDescription: "ACTIG can access photos when you ask."
+        NSHealthShareUsageDescription: "ACTIG can read health data when you ask."
+        UIBackgroundModes:
+          - audio
+          - processing
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    entitlements:
+      path: Sources/ACTIG/Support/ACTIG.entitlements
+      properties:
+        com.apple.developer.siri: true
+        com.apple.security.application-groups:
+          - group.com.actig.shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.actig.app
+        GENERATE_INFOPLIST_FILE: NO
+    dependencies:
+      - target: ACTIGWidgets
+        embed: true
+
+  ACTIGWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/ACTIGWidgets
+      # Shared sources the extension needs (intents + cross-process signal +
+      # fixed strings). Compiled into both targets — the standard pattern for
+      # App Intents shared between an app and its extension.
+      - path: Sources/ACTIG/Core/Intents/ACTIGIntents.swift
+      - path: Sources/ACTIG/Core/Common/SharedSignal.swift
+      - path: Sources/ACTIG/Core/Common/Strings.swift
+    info:
+      path: Sources/ACTIGWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: ACTIG
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Sources/ACTIGWidgets/ACTIGWidgets.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.actig.shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.actig.app.widgets
+
+  ACTIGTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/ACTIGTests
+    dependencies:
+      - target: ACTIG
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.actig.app.tests
+
+schemes:
+  ACTIG:
+    build:
+      targets:
+        ACTIG: all
+        ACTIGTests: [test]
+    test:
+      targets:
+        - ACTIGTests
+      gatherCoverageData: true

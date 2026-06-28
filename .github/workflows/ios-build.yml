@@ -1,0 +1,67 @@
+name: iOS Build
+
+# Builds ACTIG on macOS CI so you don't need a local Mac (the "no-Mac path").
+# - On every push/PR: generate the project and build for the Simulator + test.
+# - On a version tag (v*): archive and upload to TestFlight (requires secrets).
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  build-test:
+    name: Build & Test (Simulator)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build & test
+        run: |
+          xcodebuild \
+            -project ACTIG.xcodeproj \
+            -scheme ACTIG \
+            -destination 'platform=iOS Simulator,name=iPhone 15 Pro Max' \
+            -skipPackagePluginValidation \
+            clean test | xcpretty || xcodebuild \
+            -project ACTIG.xcodeproj \
+            -scheme ACTIG \
+            -destination 'platform=iOS Simulator,name=iPhone 15 Pro Max' \
+            clean test
+
+  testflight:
+    name: Archive & TestFlight
+    needs: build-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # Signing + upload. Provide these repo secrets:
+      #   APP_STORE_CONNECT_API_KEY (base64 .p8), APP_STORE_CONNECT_KEY_ID,
+      #   APP_STORE_CONNECT_ISSUER_ID, and your signing certificate/profile.
+      - name: Archive
+        run: |
+          xcodebuild -project ACTIG.xcodeproj -scheme ACTIG \
+            -archivePath build/ACTIG.xcarchive \
+            -destination 'generic/platform=iOS' \
+            archive
+      - name: Export & upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          ASC_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        run: |
+          echo "Configure exportOptions.plist + altool/notarytool here."
+          echo "See https://developer.apple.com/documentation/appstoreconnectapi"

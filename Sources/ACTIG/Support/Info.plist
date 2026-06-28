@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleDisplayName</key>
+	<string>ACTIG</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>ACTIG listens for your wake word and voice commands.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>ACTIG transcribes your speech to understand commands.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>ACTIG uses the camera to track hand gestures for the 3D workspace.</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>ACTIG plays the music you request.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>ACTIG can look up and act on your contacts when you ask.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>ACTIG can read and create calendar events when you ask.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>ACTIG can manage reminders when you ask.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>ACTIG can access photos when you ask.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>ACTIG can read health data when you ask.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>processing</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+</dict>
+</plist>

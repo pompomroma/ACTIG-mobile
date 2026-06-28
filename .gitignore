@@ -1,0 +1,43 @@
+# Xcode / Swift
+build/
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# XcodeGen generates this; keep it out of source control
+ACTIG.xcodeproj/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+
+# CocoaPods / Carthage (not used, defensive)
+Pods/
+Carthage/Build/
+
+# Secrets — never commit API keys or signing material
+*.env
+.env*
+Secrets.xcconfig
+*.p8
+*.p12
+*.mobileprovision
+*.cer
+
+# macOS
+.DS_Store
+
+# Model weights (large, fetched separately)
+*.gguf
+*.mlmodelc
+Models/Weights/
