@@ -1,8 +1,13 @@
 name: iOS Build
 
-# Builds ACTIG on macOS CI so you don't need a local Mac (the "no-Mac path").
-# - On every push/PR: generate the project and build for the Simulator + test.
-# - On a version tag (v*): archive and upload to TestFlight (requires secrets).
+# Builds ACTIG entirely in the cloud — NO Mac and NO Xcode required on your side.
+# - Every push/PR: compile gate + unit tests (Simulator).
+# - Every push: build an UNSIGNED .ipa and upload it as an artifact you can
+#   download and install via AltStore / Sideloadly from a Windows or Mac PC
+#   (works with a free Apple ID). See docs/INSTALL_NO_MAC.md.
+# - Version tag (v*): sign with an App Store Connect API key and upload to
+#   TestFlight, so you can install over-the-air from the TestFlight app
+#   (requires a paid Apple Developer account + repo secrets).
 
 on:
   push:
@@ -16,58 +21,39 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-
-      # Xcode 16 (iOS 18 SDK) is required: it can read the project format
-      # XcodeGen emits, and the Control Center widget uses iOS-18-only APIs.
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
-
       - name: Install XcodeGen
         run: brew install xcodegen
-
       - name: Generate Xcode project
         run: xcodegen generate
-
       - name: Show toolchain & pick a simulator
         id: sim
         run: |
           set -euo pipefail
           xcodebuild -version
-          # Pick the first available iPhone simulator so we don't hard-code a
-          # device name that may not exist on this runner's Xcode.
           DEVICE=$(xcrun simctl list devices available | grep -Eo 'iPhone [0-9][^(]*' | head -1 | sed 's/ *$//')
           echo "Using simulator: '$DEVICE'"
           echo "device=$DEVICE" >> "$GITHUB_OUTPUT"
-
       - name: Build (compile gate)
         run: |
           set -euo pipefail
-          # Generic Simulator destination compiles every target/arch without
-          # needing a booted device — this is the real compile gate. No xcpretty
-          # so xcodebuild's true exit status is what fails the job.
-          xcodebuild \
-            -project ACTIG.xcodeproj \
-            -scheme ACTIG \
+          xcodebuild -project ACTIG.xcodeproj -scheme ACTIG \
             -destination 'generic/platform=iOS Simulator' \
-            -skipPackagePluginValidation \
-            clean build
-
+            -skipPackagePluginValidation clean build
       - name: Test
         run: |
           set -euo pipefail
-          xcodebuild \
-            -project ACTIG.xcodeproj \
-            -scheme ACTIG \
+          xcodebuild -project ACTIG.xcodeproj -scheme ACTIG \
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
-            -skipPackagePluginValidation \
-            test
+            -skipPackagePluginValidation test
 
-  testflight:
-    name: Archive & TestFlight
+  # No-Mac install path #1: a downloadable UNSIGNED .ipa for AltStore/Sideloadly.
+  package-ipa:
+    name: Package unsigned .ipa (artifact)
     needs: build-test
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -79,21 +65,100 @@ jobs:
         run: brew install xcodegen
       - name: Generate Xcode project
         run: xcodegen generate
-
-      # Signing + upload. Provide these repo secrets:
-      #   APP_STORE_CONNECT_API_KEY (base64 .p8), APP_STORE_CONNECT_KEY_ID,
-      #   APP_STORE_CONNECT_ISSUER_ID, and your signing certificate/profile.
-      - name: Archive
+      - name: Archive without signing
         run: |
+          set -euo pipefail
           xcodebuild -project ACTIG.xcodeproj -scheme ACTIG \
-            -archivePath build/ACTIG.xcarchive \
+            -configuration Release \
             -destination 'generic/platform=iOS' \
+            -archivePath build/ACTIG.xcarchive \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             archive
-      - name: Export & upload to TestFlight
-        env:
-          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          ASC_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+      - name: Package into Payload/ACTIG.ipa
         run: |
-          echo "Configure exportOptions.plist + altool/notarytool here."
-          echo "See https://developer.apple.com/documentation/appstoreconnectapi"
+          set -euo pipefail
+          APP="build/ACTIG.xcarchive/Products/Applications/ACTIG.app"
+          rm -rf build/Payload && mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          (cd build && zip -qry ACTIG-unsigned.ipa Payload)
+          ls -lh build/ACTIG-unsigned.ipa
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ACTIG-unsigned-ipa
+          path: build/ACTIG-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+  # No-Mac install path #2: over-the-air via TestFlight (paid account + secrets).
+  testflight:
+    name: Archive & TestFlight
+    needs: build-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-15
+    env:
+      ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      ASC_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+      TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Install App Store Connect API key
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$ASC_KEY_BASE64" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+      - name: Archive (cloud signing)
+        run: |
+          set -euo pipefail
+          xcodebuild -project ACTIG.xcodeproj -scheme ACTIG \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/ACTIG.xcarchive \
+            -skipPackagePluginValidation \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            archive
+
+      - name: Export IPA
+        run: |
+          set -euo pipefail
+          cat > build/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>destination</key><string>export</string>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath build/ACTIG.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Upload to TestFlight
+        run: |
+          set -euo pipefail
+          IPA=$(ls build/export/*.ipa | head -1)
+          xcrun altool --upload-app -f "$IPA" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"

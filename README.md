@@ -61,12 +61,18 @@ Set your Claude API key at runtime (Settings tab in-app) or via the
 `ACTIG_CLAUDE_API_KEY` environment variable in the run scheme. Keys are stored
 in the Keychain, never in source.
 
-### No Mac? Cloud build → TestFlight
+### No Mac / no Xcode? (recommended for most people)
 
-`.github/workflows/ios-build.yml` builds and ships to TestFlight from CI. You
-still need an Apple Developer account and must add these repo secrets:
-`APP_STORE_CONNECT_API_KEY`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`,
-`MATCH_PASSWORD` (or your signing setup of choice). See the workflow file.
+You don't need a Mac or Xcode — CI builds everything in the cloud. Two install
+paths, both covered step-by-step in **[`docs/INSTALL_NO_MAC.md`](docs/INSTALL_NO_MAC.md)**:
+
+- **TestFlight** (paid Apple Developer account): push a version tag → CI signs
+  and uploads → install over-the-air from the TestFlight app on your iPhone.
+  Repo secrets: `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`,
+  `APP_STORE_CONNECT_API_KEY` (base64 `.p8`), `APPLE_TEAM_ID`.
+- **Download `.ipa` + sideload** (free Apple ID, Windows or Mac PC): every push
+  uploads an **`ACTIG-unsigned-ipa`** artifact under the Actions run; install it
+  with **AltStore** or **Sideloadly**, which re-sign with your own Apple ID.
 
 ---
 
