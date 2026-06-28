@@ -50,11 +50,14 @@ jobs:
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
             -skipPackagePluginValidation test
 
-  # No-Mac install path #1: a downloadable UNSIGNED .ipa for AltStore/Sideloadly.
+  # No-Mac install path #1: a downloadable UNSIGNED .ipa for AltStore/SideStore/
+  # Sideloadly. Needs only a normal Apple ID — NO App Store Connect / paid account.
   package-ipa:
     name: Package unsigned .ipa (artifact)
     needs: build-test
     runs-on: macos-15
+    permissions:
+      contents: write   # to publish the .ipa to a GitHub Release
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode
@@ -90,6 +93,22 @@ jobs:
           path: build/ACTIG-unsigned.ipa
           if-no-files-found: error
           retention-days: 30
+
+      # Publish to a rolling "build-latest" pre-release so the .ipa has a stable,
+      # phone-downloadable URL (Safari, AltStore/SideStore "install from URL").
+      # No App Store Connect involved — uses the repo's GITHUB_TOKEN.
+      - name: Publish .ipa to a rolling GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-latest
+          name: ACTIG latest build (unsigned .ipa)
+          prerelease: true
+          files: build/ACTIG-unsigned.ipa
+          body: |
+            Unsigned `.ipa` for sideloading with AltStore / SideStore / Sideloadly.
+            **No App Store Connect or paid account needed** — a free Apple ID works.
+            See `docs/INSTALL_NO_MAC.md`. Rebuilt automatically on each push.
 
   # No-Mac install path #2: over-the-air via TestFlight (paid account + secrets).
   testflight:

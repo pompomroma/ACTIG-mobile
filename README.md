@@ -61,18 +61,19 @@ Set your Claude API key at runtime (Settings tab in-app) or via the
 `ACTIG_CLAUDE_API_KEY` environment variable in the run scheme. Keys are stored
 in the Keychain, never in source.
 
-### No Mac / no Xcode? (recommended for most people)
+### No Mac / no Xcode / no paid account? (this is the main path)
 
-You don't need a Mac or Xcode — CI builds everything in the cloud. Two install
-paths, both covered step-by-step in **[`docs/INSTALL_NO_MAC.md`](docs/INSTALL_NO_MAC.md)**:
+CI builds everything in the cloud. The **free** path needs only a normal Apple ID
+— **no Xcode, no Mac, no App Store Connect, no $99 membership.** Full steps in
+**[`docs/INSTALL_NO_MAC.md`](docs/INSTALL_NO_MAC.md)**:
 
-- **TestFlight** (paid Apple Developer account): push a version tag → CI signs
-  and uploads → install over-the-air from the TestFlight app on your iPhone.
-  Repo secrets: `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`,
-  `APP_STORE_CONNECT_API_KEY` (base64 `.p8`), `APPLE_TEAM_ID`.
-- **Download `.ipa` + sideload** (free Apple ID, Windows or Mac PC): every push
-  uploads an **`ACTIG-unsigned-ipa`** artifact under the Actions run; install it
-  with **AltStore** or **Sideloadly**, which re-sign with your own Apple ID.
+- **Free sideload (recommended):** every push auto-publishes the app to the
+  **`build-latest`** GitHub Release as **`ACTIG-unsigned.ipa`**. Download it
+  (Releases page, or the Actions artifact) and install with **AltStore /
+  SideStore / Sideloadly**, which sign it with your own free Apple ID.
+- **TestFlight (optional, only with a paid account):** push a `v*` tag → CI signs
+  via an App Store Connect API key and uploads. Skip this if you don't have the
+  paid program — the free path above doesn't use it.
 
 ---
 

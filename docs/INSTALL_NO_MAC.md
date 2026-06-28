@@ -1,73 +1,73 @@
-# Installing ACTIG without a Mac or Xcode
+# Installing ACTIG without a Mac, Xcode, or a paid Apple account
 
-You never touch Xcode — GitHub Actions builds everything in the cloud. Pick the
-path that matches what you have.
-
----
-
-## Path A — TestFlight (over-the-air, needs a paid Apple Developer account)
-
-Best experience: install straight from the phone, no computer needed after setup.
-
-**One-time setup (in a browser):**
-1. Enroll in the **Apple Developer Program** ($99/yr) → developer.apple.com.
-2. In **App Store Connect → Users and Access → Integrations → App Store Connect
-   API**, create an **API Key** (Role: App Manager). Note the **Key ID** and
-   **Issuer ID**, and download the `.p8` file once.
-3. In App Store Connect, create the app record for bundle id `com.actig.app`.
-4. In the GitHub repo → **Settings → Secrets and variables → Actions**, add:
-   - `APP_STORE_CONNECT_KEY_ID` = your Key ID
-   - `APP_STORE_CONNECT_ISSUER_ID` = your Issuer ID
-   - `APP_STORE_CONNECT_API_KEY` = the `.p8` contents, base64-encoded
-     (`base64 -i AuthKey_XXXX.p8` on any machine, or an online base64 tool)
-   - `APPLE_TEAM_ID` = your 10-character Team ID (from the developer portal)
-
-**Each release:**
-1. Create a version tag and push it — e.g. on github.com use **Releases → Draft
-   a new release → tag `v0.1.0` → Publish**. (No git CLI needed.)
-2. The **Archive & TestFlight** job signs the app in the cloud (no Mac) and
-   uploads it.
-3. On your iPhone, install **TestFlight** from the App Store, sign in with your
-   Apple ID, and ACTIG appears there to install. Updates are one tap.
+GitHub Actions builds everything in the cloud. **You do NOT need Xcode, a Mac,
+App Store Connect, or the $99 Apple Developer Program** for the main path below —
+just a normal (free) Apple ID.
 
 ---
 
-## Path B — Download the `.ipa` and sideload (no Mac, free Apple ID OK)
+## Path B (recommended for you) — download the `.ipa` and sideload (FREE)
 
-Every push already builds an **unsigned `.ipa`** as a downloadable artifact. You
-sign + install it from a **Windows or Mac PC** using a free tool; the tool
-re-signs with *your* Apple ID.
+No App Store Connect. No paid account. A free Apple ID is enough.
 
-**Get the .ipa:**
-1. GitHub repo → **Actions** → open the latest **iOS Build** run.
-2. Scroll to **Artifacts** → download **`ACTIG-unsigned-ipa`** → unzip to get
-   `ACTIG-unsigned.ipa`.
+### 1. Get the `.ipa`
+Easiest — from the auto-published release (a link you can even open in Safari on
+the iPhone):
 
-**Install with AltStore (Windows or Mac):**
-1. Install **AltServer** on your PC (altstore.io) + iTunes & iCloud (Windows).
-2. Connect the iPhone, install **AltStore** onto it from AltServer.
-3. In AltStore on the phone (or via AltServer): **My Apps → + → pick
-   `ACTIG-unsigned.ipa`**, sign in with your Apple ID. It signs and installs.
-4. Trust the developer: iPhone **Settings → General → VPN & Device Management →
-   your Apple ID → Trust**.
+> **github.com/pompomroma/ACTIG-mobile/releases/tag/build-latest** → download
+> **`ACTIG-unsigned.ipa`**
 
-**Or Sideloadly** (sideloadly.io, Windows/Mac): plug in the phone, drag the
-`.ipa` in, enter your Apple ID, click **Start**.
+(That release is rebuilt automatically on every push. Alternatively: repo →
+**Actions** → latest **iOS Build** run → **Artifacts** → `ACTIG-unsigned-ipa`.)
 
-### Free-Apple-ID caveats (Path B)
-A free Apple ID can't use certain capabilities; AltStore/Sideloadly strip the
-ones it isn't entitled to, and ACTIG degrades gracefully:
-- **7-day expiry** — re-sign weekly (AltStore can auto-refresh over Wi-Fi).
-- **No push, no HealthKit, limited App Groups/Siri** — wake word, on-device AI,
-  voice, 3D studio, history, widgets and the rest still work.
-- The custom wake word and gestures need the real device (not a simulator).
+### 2. Sign + install it with a free tool
+iOS requires the app to be signed by *some* Apple ID; these tools do it with
+*yours* automatically — no App Store Connect, no paid membership.
 
-For the full feature set (push wake, HealthKit, persistent Siri), use **Path A**.
+**Option 1 — AltStore (needs a Windows or Mac computer once):**
+1. Install **AltServer** on the PC (altstore.io) + iTunes & iCloud on Windows.
+2. Plug in the iPhone → install **AltStore** onto it from AltServer.
+3. In AltStore on the phone: **My Apps → +**, choose `ACTIG-unsigned.ipa`, sign
+   in with your free Apple ID. It signs and installs.
+4. iPhone **Settings → General → VPN & Device Management → your Apple ID → Trust**.
+
+**Option 2 — SideStore (computer needed only once):** like AltStore, but after a
+one-time USB pairing it can **re-sign on the phone over Wi-Fi**, so you rarely
+touch the computer again. See sidestore.io.
+
+**Option 3 — Sideloadly (Windows/Mac):** plug in the phone, drag in the `.ipa`,
+enter your free Apple ID, click **Start**.
+
+### Free-Apple-ID caveats (and they're fine)
+The tools strip capabilities a free account can't use; ACTIG degrades gracefully:
+- **7-day expiry** — re-open AltStore/SideStore weekly to refresh (can auto-refresh on Wi-Fi).
+- **No push, no HealthKit, limited App Groups/Siri.** Still fully working: the
+  on-device offline AI, voice (wake word + barge-in), text chat, the 3D studio
+  with hand gestures, history/checkpoints, the holo HUD, and music/app launching.
+- Wake word + gestures need the real device (not the Simulator).
 
 ---
 
-## Which should I use?
-- Have/willing to pay for the Developer Program → **Path A (TestFlight)**: cleanest.
-- Want it free and have a Windows PC → **Path B (AltStore/Sideloadly)**.
-- No PC at all and no paid account → unfortunately iOS requires *some* trusted
-  signer; there is no pure on-phone install for a full app (see LIMITATIONS.md).
+## Path A (optional) — TestFlight, only if you ever get the paid account
+
+Requires the $99 Apple Developer Program + App Store Connect. If you don't have
+these, **skip this entirely — Path B does not need them.** Steps (for later):
+add repo secrets `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`,
+`APP_STORE_CONNECT_API_KEY` (base64 `.p8`), `APPLE_TEAM_ID`; push a `v*` tag; CI
+signs in the cloud and uploads to TestFlight; install via the TestFlight app.
+
+---
+
+## "I have no computer at all"
+
+iOS still requires a trusted signer, and the easy computer-free options don't fit
+this device:
+- **TrollStore** (permanent, no computer, no account) only works on iOS 14–16.x
+  (some 17.0). An iPhone 14 Pro Max on iOS 26 is **not** supported.
+- **AltStore PAL** (alternative marketplace, install over the air) is **EU-only**,
+  iOS 17.4+. If you're in the EU this can work without a computer.
+
+Otherwise you need a computer **once** (a friend's Windows PC is enough) to do the
+initial AltStore/SideStore pairing. After that, SideStore refreshes on-device.
+There is no fully on-phone install for a full native app on iOS 26 outside the EU
+— that's an Apple restriction, not a gap in ACTIG (see `LIMITATIONS.md`).
