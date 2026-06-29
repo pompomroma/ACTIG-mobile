@@ -40,7 +40,7 @@ struct ToolCall: Equatable {
 }
 
 /// Parses `<<TOOL>>{"name":"…","args":{…}}` directives out of a model reply.
-/// Uniform across every brain engine (Claude, Foundation Models, local), so we
+/// Uniform across every brain engine (Nemotron, Foundation Models, local), so we
 /// don't depend on any one provider's native tool-calling API.
 enum ToolDirectiveParser {
     static let marker = "<<TOOL>>"

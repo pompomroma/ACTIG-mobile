@@ -3,7 +3,7 @@ import Foundation
 /// Hybrid brain. Builds an ordered fallback chain and uses the first engine that
 /// succeeds, so the assistant always answers:
 ///
-///   online  : Claude (best fluency) → Foundation Models → MLX/local → fallback
+///   online  : Nemotron (best fluency) → Foundation Models → MLX/local → fallback
 ///   offline : Foundation Models → MLX/local → fallback
 ///
 /// `preferLocal` (privacy / no-network mode) skips the cloud entirely.
@@ -13,10 +13,10 @@ final class LLMRouter: BrainEngine, @unchecked Sendable {
     /// then the MLX/deterministic `LocalEngine`).
     private let onDevice: [BrainEngine]
 
-    /// User preference: force-offline even if a Claude key exists.
+    /// User preference: force-offline even if a cloud key exists.
     var preferLocal: Bool = false
 
-    init(cloud: BrainEngine = ClaudeClient(),
+    init(cloud: BrainEngine = NemotronClient(),
          onDevice: [BrainEngine] = [FoundationModelsEngine(), LocalEngine()]) {
         self.cloud = cloud
         self.onDevice = onDevice

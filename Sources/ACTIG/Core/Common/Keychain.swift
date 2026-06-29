@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-/// Tiny Keychain wrapper for secrets (the Claude API key). Keeps credentials
+/// Tiny Keychain wrapper for secrets (the NVIDIA API key). Keeps credentials
 /// out of source and out of `UserDefaults`.
 enum Keychain {
     private static let service = "com.actig.secrets"

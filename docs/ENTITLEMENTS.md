@@ -44,5 +44,5 @@ Add it to the `ACTIG` target `dependencies`, then implement the MLX path in
 quantized weights (kept out of git via `.gitignore`).
 
 ## API key (cloud brain)
-The Claude key is read from the Keychain (Settings tab) or the
-`ACTIG_CLAUDE_API_KEY` env var. Never commit it.
+The NVIDIA API key is read from the Keychain (Settings tab) or the
+`ACTIG_LLM_API_KEY` env var. Never commit it.

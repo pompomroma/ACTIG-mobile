@@ -6,7 +6,9 @@
 
 const WAKE = "wake up actig";
 const REACTION = "ACTIG at your service sir";
-const MODEL = "claude-opus-4-8";
+// Primary brain: NVIDIA Nemotron via the OpenAI-compatible NIM endpoint.
+const LLM_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions";
+const DEFAULT_MODEL = "nemotron-3-ultra-550b-a55b";
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -14,6 +16,8 @@ const store = {
   set key(v) { localStorage.setItem("actig.key", v); },
   get offline() { return localStorage.getItem("actig.offline") === "1"; },
   set offline(v) { localStorage.setItem("actig.offline", v ? "1" : "0"); },
+  get model() { return localStorage.getItem("actig.model") || DEFAULT_MODEL; },
+  set model(v) { localStorage.setItem("actig.model", v || DEFAULT_MODEL); },
   get history() { try { return JSON.parse(localStorage.getItem("actig.history") || "[]"); } catch { return []; } },
   set history(v) { localStorage.setItem("actig.history", JSON.stringify(v.slice(-400))); },
 };
@@ -70,29 +74,47 @@ function startWakeWord() {
   setStatus('Tap ⚡ or 🎤 to talk');
 }
 
-/* Push-to-talk: tap to start recording, tap again (or 8s) to stop & transcribe. */
-async function toggleRecord(forLang) {
-  if (recording) { recording.stop(); return; }            // second tap = stop now
-  if (userMuted) return;
-  const sp = await speech();
-  if (!sp.voiceInputSupported()) {
-    addBubble("sys", "Voice input needs microphone access over HTTPS. Use the text box, or open in Safari and allow the mic.");
-    $("draft").focus(); return;
+/* Open the mic. MUST be called synchronously inside a tap handler (before any
+   await) — iOS only grants mic access during a live user gesture. */
+async function acquireMic() {
+  if (!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder && window.isSecureContext)) {
+    addBubble("sys", "Voice needs microphone access over HTTPS. Type instead, or open the page in Safari and allow the mic.");
+    return null;
   }
-  if (speaking) speechSynthesis.cancel();                  // barge-in
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    addBubble("sys", "Microphone blocked (" + (e?.name || e?.message || e) + "). Allow it in iOS Settings ▸ Safari ▸ Microphone, or type your message.");
+    return null;
+  }
+}
+
+/* Record the open stream, transcribe on-device, and submit. */
+async function recordFromStream(stream) {
+  if (recording) { recording.stop(); return; }
+  if (speaking) speechSynthesis.cancel();                 // barge-in
   setMicActive(true);
   try {
-    recording = await sp.startRecording({ maxMs: 8000, onStatus: setStatus });
+    const sp = await speech();
+    recording = sp.recordStream(stream, { maxMs: 8000, onStatus: setStatus });
     const blob = await recording.done;
     recording = null; setMicActive(false);
-    const text = await sp.transcribeBlob(blob, forLang || "auto", setStatus);
+    const text = await sp.transcribeBlob(blob, "auto", setStatus);
     setStatus("Ready");
     if (text) submit(text, "voice");
-    else addBubble("sys", "I didn't catch that — try again.");
+    else addBubble("sys", "I didn't catch that — tap 🎤 and try again.");
   } catch (e) {
     recording = null; setMicActive(false); setStatus("Mic error");
-    addBubble("sys", "Microphone unavailable: " + (e?.message || e) + ". You can still type.");
+    addBubble("sys", "Voice error: " + (e?.message || e) + ". You can still type.");
   }
+}
+
+/* Mic button: tap to talk, tap again to stop. */
+async function toggleRecord() {
+  if (recording) { recording.stop(); return; }
+  if (userMuted) return;
+  const stream = await acquireMic();          // getUserMedia initiated in-gesture
+  if (stream) recordFromStream(stream);
 }
 
 function setMicActive(on) {
@@ -100,12 +122,17 @@ function setMicActive(on) {
   if (on) setStatus("Listening…");
 }
 
-function wake() {
+/* Wake (⚡): greet, then listen. Mic + TTS are both started inside the gesture. */
+async function wake() {
+  if (userMuted) setUserMuted(false);
+  if (recording) { recording.stop(); return; }
   setStatus("Awake");
-  speak(REACTION, "en-US");
   addBubble("sys", REACTION);
-  // Begin listening right after the greeting (within the user-gesture chain).
-  setTimeout(() => toggleRecord(), 600);
+  speak(REACTION, "en-US");                    // TTS started in-gesture
+  const stream = await acquireMic();           // mic acquired in-gesture
+  if (!stream) return;
+  // Let the greeting finish so it isn't recorded, then listen.
+  setTimeout(() => recordFromStream(stream), 1500);
 }
 
 /* ---------- brain ---------- */
@@ -114,36 +141,37 @@ function systemPrompt(lang) {
     + `When useful, end with:\n<<OPTIONS>>\n- option\n<<SUGGESTIONS>>\n- recommendation`;
 }
 
-async function callClaude(history, lang) {
+async function callLLM(history, lang) {
   const key = store.key;
   if (!key || store.offline) return offlineReply(lang);
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    // OpenAI-compatible chat completion (NVIDIA NIM). System prompt is the first
+    // message; the tool/options protocol is prompt-based so behaviour matches the
+    // previous Claude setup exactly.
+    const msgs = [{ role: "system", content: systemPrompt(lang) }].concat(
+      history.filter(m => m.role !== "sys")
+        .map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }))
+    );
+    const res = await fetch(LLM_ENDPOINT, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model: MODEL, max_tokens: 1024, system: systemPrompt(lang),
-        messages: history.filter(m => m.role !== "sys")
-          .map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })),
-      }),
+      headers: { "content-type": "application/json", "authorization": "Bearer " + key },
+      body: JSON.stringify({ model: store.model, messages: msgs, max_tokens: 1024, temperature: 0.6 }),
     });
     if (!res.ok) return `(${res.status}) ` + (await res.text()).slice(0, 200);
     const data = await res.json();
-    return (data.content || []).map(c => c.text || "").join("");
-  } catch (e) { return offlineReply(lang) + ` (network: ${e.message})`; }
+    return data?.choices?.[0]?.message?.content || offlineReply(lang);
+  } catch (e) {
+    // Browsers may block cross-origin API calls (CORS); fall back gracefully.
+    return offlineReply(lang) + ` (network/CORS: ${e.message})`;
+  }
 }
 
 function offlineReply(lang) {
   const m = {
-    "ko-KR": "오프라인 모드예요. 설정에서 Claude API 키를 넣으면 정확히 답할 수 있어요.",
-    "ja-JP": "オフラインです。設定でClaude APIキーを入れると正確に答えられます。",
-    "zh-CN": "当前离线。在设置中填入 Claude API 密钥后我能准确回答。",
-    "en-US": "I'm offline right now, sir. Add a Claude API key in Settings and I'll answer with full accuracy.",
+    "ko-KR": "오프라인 모드예요. 설정에서 NVIDIA API 키를 넣으면 정확히 답할 수 있어요.",
+    "ja-JP": "オフラインです。設定でNVIDIA APIキーを入れると正確に答えられます。",
+    "zh-CN": "当前离线。在设置中填入 NVIDIA API 密钥后我能准确回答。",
+    "en-US": "I'm offline right now, sir. Add your NVIDIA API key in Settings and I'll answer with full accuracy.",
   };
   return m[lang] || m["en-US"];
 }
@@ -182,7 +210,7 @@ async function submit(text, source) {
 
   // LLM brain
   setStatus("Thinking…");
-  const raw = await callClaude(messages, lang);
+  const raw = await callLLM(messages, lang);
   const { text: reply, options, suggestions } = parseStructured(raw);
   addBubble("ai", reply, options, suggestions);
   messages.push({ role: "assistant", text: reply, options, suggestions }); persist();
@@ -239,8 +267,8 @@ function boot() {
   // restore transcript
   messages.forEach(m => addBubble(m.role === "user" ? "user" : "ai", m.text, m.options, m.suggestions));
   // settings
-  $("apiKey").value = store.key; $("preferOffline").checked = store.offline;
-  $("saveKey").onclick = () => { store.key = $("apiKey").value.trim(); store.offline = $("preferOffline").checked; setStatus("Saved"); };
+  $("apiKey").value = store.key; $("preferOffline").checked = store.offline; $("model").value = store.model;
+  $("saveKey").onclick = () => { store.key = $("apiKey").value.trim(); store.model = $("model").value.trim(); store.offline = $("preferOffline").checked; setStatus("Saved"); };
   $("clearHistory").onclick = () => { messages = []; persist(); $("transcript").innerHTML = ""; };
   // input
   $("send").onclick = send; $("draft").addEventListener("keydown", e => { if (e.key === "Enter") send(); });

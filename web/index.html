@@ -43,9 +43,12 @@
     <!-- SETTINGS -->
     <section id="tab-settings" class="tab">
       <div class="settings">
-        <h3>AI brain</h3>
-        <label>Claude API key (stored only on this device)
-          <input id="apiKey" type="password" placeholder="sk-ant-..." autocomplete="off" />
+        <h3>AI brain (NVIDIA Nemotron)</h3>
+        <label>NVIDIA API key (stored only on this device)
+          <input id="apiKey" type="password" placeholder="nvapi-..." autocomplete="off" />
+        </label>
+        <label>Model
+          <input id="model" type="text" placeholder="nemotron-3-ultra-550b-a55b" autocomplete="off" />
         </label>
         <label><input id="preferOffline" type="checkbox" /> Prefer offline (no cloud)</label>
         <button id="saveKey" class="chip">Save</button>

@@ -19,7 +19,7 @@ project.yml                 XcodeGen project definition (generate the .xcodeproj
 Sources/ACTIG/
   App/                      SwiftUI entry, app state, scene restoration
   Core/
-    Brain/                  Hybrid LLM: on-device engine + Claude API client + router
+    Brain/                  Hybrid LLM: on-device engine + Nemotron API client + router
     Agent/                  Orchestrator (plan→act→observe), command router, ETA
     Memory/                 History store (SwiftData) + file vault
     Intents/                App Intents / Siri / Shortcuts
@@ -39,7 +39,7 @@ Shortcuts/                  The "drop-in file" launcher (build instructions)
   (Simulator covers chat, history, HUD, and touch-based 3D.)
 - **Xcode 15+** to build.
 - **XcodeGen** (`brew install xcodegen`) to generate the project.
-- A **Claude API key** for the cloud brain (optional). The offline brain is
+- A **NVIDIA API key** for the cloud brain (optional). The offline brain is
   real: Apple's on-device **Foundation Models** (iOS 26) via
   `Core/Brain/FoundationModelsEngine.swift`, with an optional bundled MLX model
   and a deterministic final fallback — so ACTIG answers with no network.
@@ -57,8 +57,8 @@ xcodegen generate              # creates ACTIG.xcodeproj from project.yml
 open ACTIG.xcodeproj           # build & run on Simulator or device
 ```
 
-Set your Claude API key at runtime (Settings tab in-app) or via the
-`ACTIG_CLAUDE_API_KEY` environment variable in the run scheme. Keys are stored
+Set your NVIDIA API key at runtime (Settings tab in-app) or via the
+`ACTIG_LLM_API_KEY` environment variable in the run scheme. Keys are stored
 in the Keychain, never in source.
 
 ### No computer at all? Install the web app (PWA) — only your iPhone

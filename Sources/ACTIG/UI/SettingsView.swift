@@ -1,23 +1,23 @@
 import SwiftUI
 
-/// Runtime configuration: Claude API key (stored in Keychain), offline-only
-/// toggle, and gesture-control toggle (req 4 toggle via button). Also surfaces
-/// the honest iOS-limitations note so expectations stay clear.
+/// Runtime configuration: NVIDIA Nemotron API key (stored in Keychain),
+/// offline-only toggle, and gesture-control toggle (req 4 toggle via button).
+/// Also surfaces the honest iOS-limitations note so expectations stay clear.
 struct SettingsView: View {
     @Environment(AppState.self) private var app
-    @State private var apiKey = Keychain.read("claude_api_key") ?? ""
+    @State private var apiKey = Keychain.read("llm_api_key") ?? ""
     @State private var preferLocal = false
     @State private var saved = false
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("AI brain") {
-                    SecureField("Claude API key", text: $apiKey)
+                Section("AI brain (NVIDIA Nemotron)") {
+                    SecureField("NVIDIA API key", text: $apiKey)
                     Toggle("Prefer on-device (offline) model", isOn: $preferLocal)
                         .onChange(of: preferLocal) { app.brain.preferLocal = preferLocal }
                     Button(saved ? "Saved ✓" : "Save key") {
-                        Keychain.set(apiKey, for: "claude_api_key")
+                        Keychain.set(apiKey, for: "llm_api_key")
                         saved = true
                     }
                 }

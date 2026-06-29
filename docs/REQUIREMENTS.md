@@ -33,7 +33,7 @@ the literal form) · 🔜 = scaffolded, needs device-side wiring/model.
 | 8 | Emergency wake button (always visible) | ✅ | `HoloHUDView` bolt button |
 | 9 | Holo buttons over any screen | 🟡 | in-app HUD on every tab + Siri/widgets/Control Center/Action Button |
 | 10 | Natural conversation fluency | ✅ | `PromptBuilder.system`, hybrid brain |
-| 11 | High input cognition accuracy | ✅ | `SpeechInput` + Claude brain |
+| 11 | High input cognition accuracy | ✅ | `SpeechInput` + Nemotron brain |
 | 12 | Voice interruption + new reply | ✅ | `VoiceCoordinator.bargeIn`, `SpeechInput.onSpeechStart` |
 | 13 | Flexible function commands | ✅ | `CommandRouter` |
 | 14 | All functions via voice AND text | ✅ | both call `AppState.submit` → `CommandRouter` |
@@ -47,7 +47,7 @@ the literal form) · 🔜 = scaffolded, needs device-side wiring/model.
 
 - **On-device offline brain (now ✅):** `Core/Brain/FoundationModelsEngine.swift`
   uses Apple's on-device Foundation Models (iOS 26) — real, free, offline.
-  `LLMRouter` chains Claude (online) → Foundation Models → MLX/`LocalEngine`
+  `LLMRouter` chains Nemotron (online) → Foundation Models → MLX/`LocalEngine`
   fallback. Optional custom MLX model documented in `ENTITLEMENTS.md`.
 - **Agentic actions (now ✅):** `Core/Agent/Tools.swift` + the upgraded
   `Core/Agent/Orchestrator.swift` let the brain actually *do* things (open apps,

@@ -55,7 +55,7 @@ enum BrainError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noEngineAvailable: "No AI engine is available right now."
-        case .missingAPIKey: "No Claude API key set, and the on-device model is unavailable."
+        case .missingAPIKey: "No NVIDIA API key set, and the on-device model is unavailable."
         case .http(let code, let body): "AI request failed (HTTP \(code)): \(body)"
         case .decoding(let detail): "Could not read the AI response: \(detail)"
         }

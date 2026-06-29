@@ -50,7 +50,25 @@ export async function transcribeBlob(blob, lang, onStatus) {
   return (out.text || "").trim();
 }
 
-/* Start recording; returns { stop, done }. Auto-stops after maxMs. */
+/* Record from an ALREADY-OPEN stream (the caller must obtain it inside the user
+   gesture, which iOS requires). Returns { stop, done }; auto-stops after maxMs. */
+export function recordStream(stream, { maxMs = 8000, onStatus } = {}) {
+  const mime = MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4"
+    : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  const chunks = [];
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  const stopped = new Promise((res) => { rec.onstop = res; });
+  onStatus?.("Listening…");
+  rec.start();
+  const cleanup = () => stream.getTracks().forEach((t) => t.stop());
+  const stop = () => { if (rec.state !== "inactive") rec.stop(); };
+  const timer = setTimeout(stop, maxMs);
+  const done = stopped.then(() => { clearTimeout(timer); cleanup(); return new Blob(chunks, { type: mime || "audio/webm" }); });
+  return { stop, done };
+}
+
+/* Convenience that opens the mic itself (use only inside a user gesture). */
 export async function startRecording({ maxMs = 8000, onStatus } = {}) {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const mime = MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4"
