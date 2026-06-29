@@ -41,47 +41,71 @@ function speak(text, lang) {
   speechSynthesis.speak(u);
 }
 
-/* ---------- speech recognition (wake word + dictation) ---------- */
+/* ---------- speech input ----------
+   iOS Safari has no Web Speech *recognition* API, so we record the mic and
+   transcribe on-device with Whisper (speech.js). Where the native API DOES
+   exist (Android/desktop) we use it for a hands-free wake word too. */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let wakeRec = null, dictRec = null;
+let wakeRec = null, recording = null, speechMod = null;
+
+async function speech() { return (speechMod ??= await import("./speech.js")); }
 
 function startWakeWord() {
-  if (!SR) { setStatus('Tap ⚡ or 🎤 to talk (voice wake unsupported here)'); return; }
-  try {
-    wakeRec = new SR();
-    wakeRec.continuous = true; wakeRec.interimResults = true; wakeRec.lang = "en-US";
-    wakeRec.onresult = (e) => {
-      const heard = Array.from(e.results).map(r => r[0].transcript).join(" ").toLowerCase();
-      if (heard.includes(WAKE)) { wake(); }
-    };
-    wakeRec.onerror = () => {};
-    wakeRec.onend = () => { if (!userMuted) { try { wakeRec.start(); } catch {} } };
-    wakeRec.start();
-    setStatus('Listening for “wake up ACTIG”');
-  } catch { setStatus('Tap ⚡ or 🎤 to talk'); }
+  if (SR) {
+    try {
+      wakeRec = new SR();
+      wakeRec.continuous = true; wakeRec.interimResults = true; wakeRec.lang = "en-US";
+      wakeRec.onresult = (e) => {
+        const heard = Array.from(e.results).map(r => r[0].transcript).join(" ").toLowerCase();
+        if (heard.includes(WAKE)) wake();
+      };
+      wakeRec.onerror = () => {};
+      wakeRec.onend = () => { if (!userMuted) { try { wakeRec.start(); } catch {} } };
+      wakeRec.start();
+      setStatus('Listening for “wake up ACTIG”');
+      return;
+    } catch {}
+  }
+  // iOS / no continuous recognition: push-to-talk.
+  setStatus('Tap ⚡ or 🎤 to talk');
 }
 
-function dictateOnce() {
+/* Push-to-talk: tap to start recording, tap again (or 8s) to stop & transcribe. */
+async function toggleRecord(forLang) {
+  if (recording) { recording.stop(); return; }            // second tap = stop now
   if (userMuted) return;
-  if (!SR) { $("draft").focus(); return; }
-  if (speaking) speechSynthesis.cancel();          // barge-in
+  const sp = await speech();
+  if (!sp.voiceInputSupported()) {
+    addBubble("sys", "Voice input needs microphone access over HTTPS. Use the text box, or open in Safari and allow the mic.");
+    $("draft").focus(); return;
+  }
+  if (speaking) speechSynthesis.cancel();                  // barge-in
+  setMicActive(true);
   try {
-    dictRec = new SR();
-    dictRec.lang = "en-US"; dictRec.interimResults = false; dictRec.continuous = false;
-    dictRec.onresult = (e) => {
-      const text = e.results[0][0].transcript.trim();
-      if (text) submit(text, "voice");
-    };
-    dictRec.start();
-    setStatus("Listening…");
-  } catch { $("draft").focus(); }
+    recording = await sp.startRecording({ maxMs: 8000, onStatus: setStatus });
+    const blob = await recording.done;
+    recording = null; setMicActive(false);
+    const text = await sp.transcribeBlob(blob, forLang || "auto", setStatus);
+    setStatus("Ready");
+    if (text) submit(text, "voice");
+    else addBubble("sys", "I didn't catch that — try again.");
+  } catch (e) {
+    recording = null; setMicActive(false); setStatus("Mic error");
+    addBubble("sys", "Microphone unavailable: " + (e?.message || e) + ". You can still type.");
+  }
+}
+
+function setMicActive(on) {
+  const b = $("micUser"); if (b) b.classList.toggle("on", on);
+  if (on) setStatus("Listening…");
 }
 
 function wake() {
   setStatus("Awake");
   speak(REACTION, "en-US");
   addBubble("sys", REACTION);
-  setTimeout(dictateOnce, 900);
+  // Begin listening right after the greeting (within the user-gesture chain).
+  setTimeout(() => toggleRecord(), 600);
 }
 
 /* ---------- brain ---------- */
@@ -223,7 +247,7 @@ function boot() {
   function send() { const v = $("draft").value.trim(); if (!v) return; $("draft").value = ""; submit(v, "text"); }
   // HUD
   $("emergency").onclick = wake;
-  $("micUser").onclick = () => { if (userMuted) setUserMuted(false); else dictateOnce(); };
+  $("micUser").onclick = () => { if (userMuted) setUserMuted(false); else toggleRecord(); };
   $("micAI").onclick = () => setAIMuted(!aiMuted);
   $("open3d").onclick = () => switchTab("studio");
   // tabs

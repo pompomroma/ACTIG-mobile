@@ -49,6 +49,9 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
 .holo.accent{color:var(--accent);border-color:var(--accent)}
 .holo.danger{color:var(--danger);border-color:var(--danger)}
 .holo.muted-on{opacity:.45}
+.holo.on{background:var(--primary);color:#021018;border-color:var(--primary);
+  animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 10px rgba(69,199,255,.5)}50%{box-shadow:0 0 22px rgba(69,199,255,.95)}}
 
 .inputbar{display:flex;gap:8px;padding:8px 12px;border-top:1px solid var(--line)}
 .inputbar input{flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);
