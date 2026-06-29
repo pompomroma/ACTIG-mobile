@@ -22,9 +22,14 @@ final class NemotronClient: BrainEngine, @unchecked Sendable {
         self.session = session
     }
 
+    /// Built-in NVIDIA API key so the app works with zero setup. An env var or a
+    /// key saved in the Keychain (via Settings) takes precedence over this.
+    static let builtInKey = "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"
+
     var apiKey: String? {
         ProcessInfo.processInfo.environment["ACTIG_LLM_API_KEY"]
             ?? Keychain.read("llm_api_key")
+            ?? NemotronClient.builtInKey
     }
 
     var isAvailable: Bool { apiKey?.isEmpty == false }
