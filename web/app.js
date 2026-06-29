@@ -9,10 +9,13 @@ const REACTION = "ACTIG at your service sir";
 // Primary brain: NVIDIA Nemotron via the OpenAI-compatible NIM endpoint.
 const LLM_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions";
 const DEFAULT_MODEL = "nemotron-3-ultra-550b-a55b";
+// Built-in NVIDIA API key so the app answers with full accuracy out of the box —
+// no Settings step needed. A key typed in Settings overrides this one.
+const BUILTIN_KEY = "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";
 
 const $ = (id) => document.getElementById(id);
 const store = {
-  get key() { return localStorage.getItem("actig.key") || ""; },
+  get key() { return localStorage.getItem("actig.key") || BUILTIN_KEY; },
   set key(v) { localStorage.setItem("actig.key", v); },
   get offline() { return localStorage.getItem("actig.offline") === "1"; },
   set offline(v) { localStorage.setItem("actig.offline", v ? "1" : "0"); },
