@@ -38,11 +38,25 @@ function detectLang(t) {
 function speak(text, lang) {
   if (aiMuted || !("speechSynthesis" in window)) return;
   speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
+  speakQueued(text, lang);
+}
+/* Enqueue a chunk without cancelling what's already queued — lets us start
+   talking on the first finished sentence while the rest still streams in. */
+function speakQueued(text, lang) {
+  if (aiMuted || !("speechSynthesis" in window)) return;
+  const t = (text || "").trim();
+  if (!t) return;
+  const u = new SpeechSynthesisUtterance(t);
   u.lang = lang || "en-US";
   u.onstart = () => { speaking = true; };
   u.onend = () => { speaking = false; };
   speechSynthesis.speak(u);
+}
+/* Length up to and including the last sentence terminator (so we only speak
+   complete sentences as they arrive). 0 when there isn't one yet. */
+function lastSentenceEnd(s) {
+  const m = s.match(/^[\s\S]*[.!?。！？\n]/);
+  return m ? m[0].length : 0;
 }
 
 /* ---------- speech input ----------
@@ -51,27 +65,19 @@ function speak(text, lang) {
    exist (Android/desktop) we use it for a hands-free wake word too. */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let wakeRec = null, recording = null, speechMod = null;
+/* Continuous-mic state. One tap turns the mic ON and keeps it on: it first
+   listens only for the wake word, then (once awake) feeds everything you say to
+   the AI — until you mute it by button, voice, or text. */
+let micOn = false, awake = false, listenStream = null, listenAbort = false;
 
 async function speech() { return (speechMod ??= await import("./speech.js")); }
+const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
-function startWakeWord() {
-  if (SR) {
-    try {
-      wakeRec = new SR();
-      wakeRec.continuous = true; wakeRec.interimResults = true; wakeRec.lang = "en-US";
-      wakeRec.onresult = (e) => {
-        const heard = Array.from(e.results).map(r => r[0].transcript).join(" ").toLowerCase();
-        if (heard.includes(WAKE)) wake();
-      };
-      wakeRec.onerror = () => {};
-      wakeRec.onend = () => { if (!userMuted) { try { wakeRec.start(); } catch {} } };
-      wakeRec.start();
-      setStatus('Listening for “wake up ACTIG”');
-      return;
-    } catch {}
-  }
-  // iOS / no continuous recognition: push-to-talk.
-  setStatus('Tap ⚡ or 🎤 to talk');
+/* Tolerant wake-word match: on-device Whisper often mishears the coined word
+   "ACTIG" (e.g. "active", "at tig"), so accept any "wake up …" phrasing. */
+function isWake(t) {
+  const s = (t || "").toLowerCase();
+  return s.includes(WAKE) || (s.includes("wake") && s.includes("up"));
 }
 
 /* Open the mic. MUST be called synchronously inside a tap handler (before any
@@ -89,50 +95,115 @@ async function acquireMic() {
   }
 }
 
-/* Record the open stream, transcribe on-device, and submit. */
-async function recordFromStream(stream) {
-  if (recording) { recording.stop(); return; }
-  if (speaking) speechSynthesis.cancel();                 // barge-in
+/* Mic button: one tap turns the mic permanently on (tap again, or a mute
+   command, turns it off). Must run inside the tap gesture for iOS. */
+async function toggleMic() {
+  if (micOn) { stopMic("Mic off"); return; }
+  userMuted = false; $("micUser").classList.remove("muted-on");
+  const stream = await acquireMic();          // getUserMedia initiated in-gesture
+  if (stream) startMic(stream);
+}
+
+/* Begin continuous listening on an already-open stream. */
+function startMic(stream) {
+  micOn = true; awake = false; listenAbort = false;
   setMicActive(true);
-  try {
-    const sp = await speech();
-    recording = sp.recordStream(stream, { maxMs: 8000, onStatus: setStatus });
-    const blob = await recording.done;
-    recording = null; setMicActive(false);
-    const text = await sp.transcribeBlob(blob, "auto", setStatus);
-    setStatus("Ready");
-    if (text) submit(text, "voice");
-    else addBubble("sys", "I didn't catch that — tap 🎤 and try again.");
-  } catch (e) {
-    recording = null; setMicActive(false); setStatus("Mic error");
-    addBubble("sys", "Voice error: " + (e?.message || e) + ". You can still type.");
+  setStatus('Mic on — say “wake up ACTIG”');
+  if (SR) {
+    // Native recognition manages its own audio; the gesture stream was only
+    // needed to confirm the mic permission, so release it to avoid a double hold.
+    stream.getTracks().forEach(t => t.stop());
+    listenStream = null;
+    startWakeRecognition();                    // Android/desktop: native continuous recognition
+  } else {
+    listenStream = stream;
+    listenLoop(stream);                         // iOS: chunked on-device Whisper loop
   }
 }
 
-/* Mic button: tap to talk, tap again to stop. */
-async function toggleRecord() {
-  if (recording) { recording.stop(); return; }
-  if (userMuted) return;
-  const stream = await acquireMic();          // getUserMedia initiated in-gesture
-  if (stream) recordFromStream(stream);
+/* Turn the mic fully off and release the hardware. */
+function stopMic(status) {
+  micOn = false; awake = false; listenAbort = true;
+  if (recording) { try { recording.stop(); } catch {} }
+  if (wakeRec) { try { wakeRec.onend = null; wakeRec.stop(); } catch {} wakeRec = null; }
+  if (listenStream) { try { listenStream.getTracks().forEach(t => t.stop()); } catch {} listenStream = null; }
+  setMicActive(false);
+  setStatus(status || "Mic off");
+}
+
+/* The wake word was heard — greet once and start feeding speech to the AI. */
+function becomeAwake() {
+  if (awake) return;
+  awake = true;
+  setStatus("Awake — listening…");
+  addBubble("sys", REACTION);
+  speak(REACTION, "en-US");
+}
+
+/* Android/desktop path: native continuous recognition handles both the wake
+   word and, once awake, each spoken request. */
+function startWakeRecognition() {
+  try {
+    wakeRec = new SR();
+    wakeRec.continuous = true; wakeRec.interimResults = true; wakeRec.lang = "en-US";
+    wakeRec.onresult = (e) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        const heard = (r[0].transcript || "").trim();
+        if (!awake) { if (isWake(heard)) becomeAwake(); }
+        else if (r.isFinal && heard) submit(heard, "voice");
+      }
+    };
+    wakeRec.onerror = () => {};
+    wakeRec.onend = () => { if (micOn && !userMuted) { try { wakeRec.start(); } catch {} } };
+    wakeRec.start();
+  } catch { listenLoop(listenStream); }       // fall back to the Whisper loop
+}
+
+/* iOS path: keep the one stream open and loop record → transcribe. Before the
+   wake word we only watch for it; after, each window is sent to the AI. */
+async function listenLoop(stream) {
+  let sp;
+  try { sp = await speech(); }
+  catch (e) { stopMic("Voice unavailable"); addBubble("sys", "Couldn't load the speech model: " + (e?.message || e)); return; }
+  while (micOn && !listenAbort) {
+    if (speaking) { await delay(250); continue; }   // don't record ACTIG's own voice
+    let text = "";
+    try {
+      recording = sp.recordStream(stream, { maxMs: awake ? 7000 : 4000, keepAlive: true, onStatus: setStatus });
+      const blob = await recording.done;
+      recording = null;
+      if (!micOn || listenAbort) break;
+      text = await sp.transcribeBlob(blob, "auto", setStatus);
+    } catch (e) {
+      recording = null;
+      if (!micOn || listenAbort) break;
+      await delay(400); continue;                    // transient error — keep listening
+    }
+    if (!micOn || listenAbort) break;
+    if (!text) { setStatus(awake ? "Listening…" : 'Say “wake up ACTIG”'); continue; }
+    if (!awake) {
+      if (isWake(text)) becomeAwake();
+      else setStatus('Say “wake up ACTIG”');
+    } else {
+      await submit(text, "voice");                    // await so we don't talk over the reply
+    }
+  }
 }
 
 function setMicActive(on) {
   const b = $("micUser"); if (b) b.classList.toggle("on", on);
-  if (on) setStatus("Listening…");
 }
 
-/* Wake (⚡): greet, then listen. Mic + TTS are both started inside the gesture. */
+/* Wake (⚡): turn the mic on (if needed) and skip straight to awake. */
 async function wake() {
-  if (userMuted) setUserMuted(false);
-  if (recording) { recording.stop(); return; }
-  setStatus("Awake");
-  addBubble("sys", REACTION);
-  speak(REACTION, "en-US");                    // TTS started in-gesture
-  const stream = await acquireMic();           // mic acquired in-gesture
-  if (!stream) return;
-  // Let the greeting finish so it isn't recorded, then listen.
-  setTimeout(() => recordFromStream(stream), 1500);
+  userMuted = false; $("micUser").classList.remove("muted-on");
+  if (!micOn) {
+    const stream = await acquireMic();          // mic acquired in-gesture
+    if (!stream) return;
+    startMic(stream);
+  }
+  becomeAwake();
 }
 
 /* ---------- brain ---------- */
@@ -141,7 +212,10 @@ function systemPrompt(lang) {
     + `When useful, end with:\n<<OPTIONS>>\n- option\n<<SUGGESTIONS>>\n- recommendation`;
 }
 
-async function callLLM(history, lang) {
+/* Streaming chat completion. Tokens are pushed to `onToken(delta, full)` as they
+   arrive so the reply renders (and starts speaking) immediately instead of after
+   the whole 550B generation finishes — the single biggest perceived-speed win. */
+async function callLLM(history, lang, onToken) {
   const key = store.key;
   if (!key || store.offline) return offlineReply(lang);
   try {
@@ -155,11 +229,36 @@ async function callLLM(history, lang) {
     const res = await fetch(LLM_ENDPOINT, {
       method: "POST",
       headers: { "content-type": "application/json", "authorization": "Bearer " + key },
-      body: JSON.stringify({ model: store.model, messages: msgs, max_tokens: 1024, temperature: 0.6 }),
+      body: JSON.stringify({ model: store.model, messages: msgs, max_tokens: 1024, temperature: 0.6, stream: true }),
     });
     if (!res.ok) return `(${res.status}) ` + (await res.text()).slice(0, 200);
-    const data = await res.json();
-    return data?.choices?.[0]?.message?.content || offlineReply(lang);
+    // Fall back to a plain read if the runtime can't expose a stream body.
+    if (!res.body || !res.body.getReader) {
+      const data = await res.json();
+      const full = data?.choices?.[0]?.message?.content || offlineReply(lang);
+      onToken?.(full, full);
+      return full;
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "", full = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const delta = JSON.parse(payload)?.choices?.[0]?.delta?.content || "";
+          if (delta) { full += delta; onToken?.(delta, full); }
+        } catch {}
+      }
+    }
+    return full || offlineReply(lang);
   } catch (e) {
     // Browsers may block cross-origin API calls (CORS); fall back gracefully.
     return offlineReply(lang) + ` (network/CORS: ${e.message})`;
@@ -208,14 +307,31 @@ async function submit(text, source) {
   if (/(mute).*(me|mic)|음소거/.test(low)) { setUserMuted(true); return finish("Your mic is muted.", lang, source); }
   if (/(be quiet|mute (yourself|ai)|stop talking|조용히)/.test(low)) { setAIMuted(true); return finish("Voice muted.", lang, source); }
 
-  // LLM brain
+  // LLM brain — stream straight into a live bubble so the reply appears (and,
+  // for voice, starts speaking) the moment the first tokens land.
   setStatus("Thinking…");
-  const raw = await callLLM(messages, lang);
+  const bubble = addBubble("ai", "");
+  if (source === "voice" && "speechSynthesis" in window) speechSynthesis.cancel();
+  let spoken = 0, firstToken = true;
+  const raw = await callLLM(messages, lang, (_delta, full) => {
+    if (firstToken) { firstToken = false; setStatus("Replying…"); }
+    const shown = parseStructured(full).text;      // hide <<OPTIONS>>/<<SUGGESTIONS>> markers
+    setBubbleText(bubble, shown);
+    if (source === "voice") {                       // speak completed sentences as they form
+      const pending = shown.slice(spoken);
+      const end = lastSentenceEnd(pending);
+      if (end > 0) { speakQueued(pending.slice(0, end), lang); spoken += end; }
+    }
+  });
   const { text: reply, options, suggestions } = parseStructured(raw);
-  addBubble("ai", reply, options, suggestions);
+  setBubbleText(bubble, reply);
+  decorateBubble(bubble, options, suggestions);
   messages.push({ role: "assistant", text: reply, options, suggestions }); persist();
   setStatus("Ready");
-  if (source === "voice") speak(reply, lang);
+  if (source === "voice") {                          // speak any trailing remainder past the last sentence
+    const rest = reply.slice(spoken).trim();
+    if (rest) speakQueued(rest, lang);
+  }
 }
 
 function finish(reply, lang, source) {
@@ -229,20 +345,38 @@ function addBubble(kind, text, options = [], suggestions = []) {
   const t = $("transcript");
   const b = document.createElement("div");
   b.className = "bubble " + (kind === "user" ? "user" : kind === "sys" ? "sys" : "ai");
-  b.textContent = text;
-  if (options.length || suggestions.length) {
-    const wrap = document.createElement("div"); wrap.className = "chips";
-    [...options, ...suggestions].forEach(o => {
-      const c = document.createElement("span"); c.className = "opt"; c.textContent = o;
-      c.onclick = () => submit(o, "text"); wrap.appendChild(c);
-    });
-    b.appendChild(wrap);
-  }
+  const txt = document.createElement("span");
+  txt.className = "txt"; txt.textContent = text;
+  b.appendChild(txt);
+  decorateBubble(b, options, suggestions);
   t.appendChild(b); t.scrollTop = t.scrollHeight;
+  return b;
+}
+/* Replace a bubble's text in place (used while a reply streams in). */
+function setBubbleText(b, text) {
+  const txt = b.querySelector(".txt"); if (txt) txt.textContent = text;
+  const t = $("transcript"); t.scrollTop = t.scrollHeight;
+}
+/* Render (or re-render) the option/suggestion chips for a bubble. */
+function decorateBubble(b, options = [], suggestions = []) {
+  const old = b.querySelector(".chips"); if (old) old.remove();
+  if (!(options.length || suggestions.length)) return;
+  const wrap = document.createElement("div"); wrap.className = "chips";
+  [...options, ...suggestions].forEach(o => {
+    const c = document.createElement("span"); c.className = "opt"; c.textContent = o;
+    c.onclick = () => submit(o, "text"); wrap.appendChild(c);
+  });
+  b.appendChild(wrap);
 }
 function persist() { store.history = messages; }
 function setStatus(s) { $("status").textContent = s; }
-function setUserMuted(v) { userMuted = v; $("micUser").classList.toggle("muted-on", v); if (v && wakeRec) try { wakeRec.stop(); } catch {} else startWakeWord(); }
+/* Muting (button, voice, or text) turns the mic fully off; unmuting just clears
+   the flag — the user re-taps 🎤 to switch the mic back on (iOS needs the gesture). */
+function setUserMuted(v) {
+  userMuted = v;
+  $("micUser").classList.toggle("muted-on", v);
+  if (v) stopMic("Mic muted");
+}
 function setAIMuted(v) { aiMuted = v; $("micAI").classList.toggle("muted-on", v); if (v) speechSynthesis.cancel(); }
 
 function switchTab(name) {
@@ -275,7 +409,7 @@ function boot() {
   function send() { const v = $("draft").value.trim(); if (!v) return; $("draft").value = ""; submit(v, "text"); }
   // HUD
   $("emergency").onclick = wake;
-  $("micUser").onclick = () => { if (userMuted) setUserMuted(false); else toggleRecord(); };
+  $("micUser").onclick = toggleMic;            // one tap turns the mic on/off
   $("micAI").onclick = () => setAIMuted(!aiMuted);
   $("open3d").onclick = () => switchTab("studio");
   // tabs
@@ -286,7 +420,7 @@ function boot() {
   $("del").onclick = () => studio?.remove();
   $("gesture").onclick = (e) => { ensureStudio().then(() => { const on = studio?.toggleGestures(); e.target.classList.toggle("on", on); }); };
 
-  startWakeWord();
+  setStatus('Tap 🎤 to turn on the mic');
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 }
 document.addEventListener("DOMContentLoaded", boot);
