@@ -68,13 +68,13 @@ A free CDN (raw.githack.com) serves the app straight from the repo — nothing t
 enable.
 
 1. In **Safari**, open this known-good build:
-   **https://raw.githack.com/pompomroma/ACTIG-mobile/30c9a5defc26f6a29361c21ff808c8656b4313f9/web/index.html**
+   **https://raw.githack.com/pompomroma/ACTIG-mobile/9e01c3770ce39becfe5b087c40ab8a202d647de7/web/index.html**
 2. Tap **Share → Add to Home Screen → Add**.
 3. Launch **ACTIG** from the Home Screen (full-screen, offline-capable after first load).
 4. Optional: in **Settings**, paste a **NVIDIA API key** for the smartest replies.
 
 Alternative CDN (also zero setup): jsDelivr —
-`https://cdn.jsdelivr.net/gh/pompomroma/ACTIG-mobile@30c9a5defc26f6a29361c21ff808c8656b4313f9/web/index.html`.
+`https://cdn.jsdelivr.net/gh/pompomroma/ACTIG-mobile@9e01c3770ce39becfe5b087c40ab8a202d647de7/web/index.html`.
 
 > The long string is a **commit hash** (not a typo). The working branch name
 > contains `/` characters, which these CDNs can't parse, so we pin to a commit
