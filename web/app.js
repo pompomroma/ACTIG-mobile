@@ -259,15 +259,17 @@ async function callLLM(history, lang, onToken) {
       body: JSON.stringify({ model: store.model, messages: msgs, max_tokens: 1024, temperature: 0.6, stream: true }),
     });
     if (!res.ok) {
+      // For the keyless default, retry via the simple GET API before giving up.
+      if (keyless) return await pollinationsGet(history, lang, onToken);
       const body = (await res.text().catch(() => "")).slice(0, 240);
       return httpErrorMessage(res.status, body, lang);
     }
     // Fall back to a plain read if the runtime can't expose a stream body.
     if (!res.body || !res.body.getReader) {
-      const data = await res.json();
-      const full = data?.choices?.[0]?.message?.content || offlineReply(lang);
-      onToken?.(full, full);
-      return full;
+      const data = await res.json().catch(() => null);
+      const full = data?.choices?.[0]?.message?.content || data?.message?.content || "";
+      if (full) { onToken?.(full, full); return full; }
+      return keyless ? await pollinationsGet(history, lang, onToken) : offlineReply(lang);
     }
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -288,17 +290,41 @@ async function callLLM(history, lang, onToken) {
         } catch {}
       }
     }
-    return full || offlineReply(lang);
+    if (full) return full;
+    return keyless ? await pollinationsGet(history, lang, onToken) : offlineReply(lang);
   } catch (e) {
-    // A thrown fetch in the browser is almost always CORS: NVIDIA's API has no
-    // CORS headers, so a direct PWA call is blocked. Point Settings at a proxy.
-    const direct = store.endpoint.includes("integrate.api.nvidia.com");
+    // A thrown fetch in the browser is almost always CORS. For the keyless
+    // default, fall back to the GET API (a "simple" request: no preflight, so it
+    // sails through CORS). For NVIDIA, direct calls can't work — point to a proxy.
+    if (keyless) {
+      try { return await pollinationsGet(history, lang, onToken); } catch {}
+    }
+    const direct = endpoint.includes("integrate.api.nvidia.com");
     return direct
       ? "⚠️ The browser blocked the request to NVIDIA (CORS). NVIDIA's API can't be called directly from a web app. "
         + "Open Settings ▸ API endpoint and paste your CORS-proxy URL (see web/proxy/cloudflare-worker.js), then Save. "
         + `(${e.message})`
-      : `⚠️ Couldn't reach the API endpoint. Check the endpoint URL in Settings. (${e.message})`;
+      : `⚠️ Couldn't reach the AI. Check Settings ▸ API endpoint, or try again. (${e.message})`;
   }
+}
+
+/* Pollinations' simple GET text API. A GET with no custom headers is a CORS
+   "simple request" — no preflight — so it works from any browser page even when
+   the streaming POST is blocked. Returns the whole reply at once (no streaming).
+   Recent turns are flattened into one prompt; GET URLs have a length limit, so we
+   only send the last few messages. */
+async function pollinationsGet(history, lang, onToken) {
+  const recent = history.filter(m => m.role !== "sys").slice(-6)
+    .map(m => (m.role === "user" ? "User: " : "ACTIG: ") + m.text).join("\n");
+  const prompt = (systemPrompt(lang) + "\n\n" + recent + "\nACTIG:").slice(-1800);
+  const url = "https://text.pollinations.ai/" + encodeURIComponent(prompt)
+    + "?model=" + encodeURIComponent(store.model || "openai") + "&referrer=actig-pwa";
+  const res = await fetch(url);                 // simple request — no preflight
+  if (!res.ok) throw new Error("pollinations GET " + res.status);
+  const text = (await res.text()).trim();
+  if (!text) throw new Error("empty reply");
+  onToken?.(text, text);
+  return text;
 }
 
 /* Turn an HTTP failure into a clear, actionable line instead of a vague "offline". */
