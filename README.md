@@ -63,12 +63,13 @@ in the Keychain, never in source.
 
 ### No computer at all? Install the web app (PWA) — only your iPhone
 
-Zero setup, no GitHub settings: open this in **Safari → Share → Add to Home
-Screen** —
-**https://raw.githack.com/pompomroma/ACTIG-mobile/9e01c3770ce39becfe5b087c40ab8a202d647de7/web/index.html**
+Zero setup, no GitHub settings, **no API key**: open this in **Safari → Share →
+Add to Home Screen** —
+**https://raw.githack.com/pompomroma/ACTIG-mobile/72eee4c9316a91140c73eec4b04fd4f4fbe350d5/web/index.html**
 (served straight from the repo by a free CDN; the long code is a commit hash, used
 because the working branch name contains slashes that CDNs can't parse). No PC, no Apple account, no
-signing. Covers chat, voice in/out, wake word, language switch, the 3D studio,
+signing, no key. The AI answers immediately via a free, browser-friendly brain.
+Covers chat, voice in/out, wake word, language switch, the 3D studio,
 and history; native-only features (Siri, widgets, HealthKit, Apple's on-device
 model) need the native app. For a permanent `github.io` URL, the owner can enable
 Pages once and run `.github/workflows/pages.yml` — details in
