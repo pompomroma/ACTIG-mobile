@@ -6,19 +6,16 @@
 
 const WAKE = "wake up actig";
 const REACTION = "ACTIG at your service sir";
-// Primary brain: NVIDIA Nemotron via the OpenAI-compatible NIM endpoint.
-// NOTE: integrate.api.nvidia.com is a server-to-server API and does NOT send
-// browser CORS headers, so a PWA can't call it directly — set a CORS proxy URL
-// in Settings (see web/proxy/cloudflare-worker.js) to make voice/chat work.
-const DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions";
-// Valid, generally-available NIM model id (the old "nemotron-3-ultra-550b-a55b"
-// was not a real model and made every request fail).
-const DEFAULT_MODEL = "nvidia/llama-3.1-nemotron-70b-instruct";
-// Built-in NVIDIA API key so the app answers with full accuracy out of the box —
-// no Settings step needed. A key typed in Settings overrides this one. (A key
-// committed to a public repo can be auto-revoked by NVIDIA — if you get a 401,
-// paste a fresh key in Settings.)
+// Default brain: Pollinations — a free, OpenAI-compatible, CORS-enabled endpoint
+// that needs NO API key and NO proxy, so the web app answers out of the box.
+// (NVIDIA Nemotron is still available: paste its endpoint + key in Settings, but
+//  it has no browser CORS headers so it also needs the proxy in web/proxy/.)
+const DEFAULT_ENDPOINT = "https://text.pollinations.ai/openai";
+const DEFAULT_MODEL = "openai";
+// Optional fallback NVIDIA key (used only if you switch the endpoint to NVIDIA).
 const BUILTIN_KEY = "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";
+// Endpoints that need no Authorization header (keyless, browser-callable).
+const KEYLESS = /pollinations\.ai/i;
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -33,6 +30,18 @@ const store = {
   get history() { try { return JSON.parse(localStorage.getItem("actig.history") || "[]"); } catch { return []; } },
   set history(v) { localStorage.setItem("actig.history", JSON.stringify(v.slice(-400))); },
 };
+
+/* One-time migration: drop any previously-saved NVIDIA endpoint/model so existing
+   installs adopt the new zero-setup keyless default. The user's offline choice and
+   any custom (non-NVIDIA) endpoint they set are left untouched. */
+(function migrateConfig() {
+  if (localStorage.getItem("actig.cfgv") === "2") return;
+  const ep = localStorage.getItem("actig.endpoint") || "";
+  const md = localStorage.getItem("actig.model") || "";
+  if (ep.includes("integrate.api.nvidia.com")) localStorage.removeItem("actig.endpoint");
+  if (md.includes("nemotron")) localStorage.removeItem("actig.model");
+  localStorage.setItem("actig.cfgv", "2");
+})();
 
 let messages = store.history;        // {role, text, options?, suggestions?}
 let aiMuted = false, userMuted = false, speaking = false;
@@ -228,21 +237,25 @@ function systemPrompt(lang) {
    arrive so the reply renders (and starts speaking) immediately instead of after
    the whole 550B generation finishes — the single biggest perceived-speed win. */
 async function callLLM(history, lang, onToken) {
+  const endpoint = store.endpoint;
+  const keyless = KEYLESS.test(endpoint);   // Pollinations etc. need no key
   const key = store.key;
-  // Only the user's explicit "prefer offline" choice (or a truly empty key)
-  // forces the canned offline reply — real failures get a specific message.
-  if (!key || store.offline) return offlineReply(lang);
+  // Honour the explicit "prefer offline" choice; only require a key for
+  // endpoints that actually need one (NVIDIA). Real failures get a specific msg.
+  if (store.offline) return offlineReply(lang);
+  if (!keyless && !key) return offlineReply(lang);
   try {
-    // OpenAI-compatible chat completion (NVIDIA NIM). System prompt is the first
-    // message; the tool/options protocol is prompt-based so behaviour matches the
-    // previous Claude setup exactly.
+    // OpenAI-compatible chat completion. System prompt is the first message; the
+    // tool/options protocol is prompt-based so behaviour matches across providers.
     const msgs = [{ role: "system", content: systemPrompt(lang) }].concat(
       history.filter(m => m.role !== "sys")
         .map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }))
     );
-    const res = await fetch(store.endpoint, {
+    const headers = { "content-type": "application/json" };
+    if (!keyless && key) headers["authorization"] = "Bearer " + key;
+    const res = await fetch(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json", "authorization": "Bearer " + key },
+      headers,
       body: JSON.stringify({ model: store.model, messages: msgs, max_tokens: 1024, temperature: 0.6, stream: true }),
     });
     if (!res.ok) {
@@ -291,7 +304,7 @@ async function callLLM(history, lang, onToken) {
 /* Turn an HTTP failure into a clear, actionable line instead of a vague "offline". */
 function httpErrorMessage(status, body, lang) {
   if (status === 401 || status === 403)
-    return `⚠️ API key rejected (HTTP ${status}). The key is missing, wrong, or was revoked — paste a valid NVIDIA key in Settings and Save. ${body}`;
+    return `⚠️ API key rejected (HTTP ${status}). The default brain needs no key — clear the API key field in Settings, or paste a valid one for your endpoint, then Save. ${body}`;
   if (status === 404 || status === 400)
     return `⚠️ The model id looks wrong (HTTP ${status}). Set a valid model in Settings (default: ${DEFAULT_MODEL}). ${body}`;
   if (status === 429)
@@ -301,10 +314,10 @@ function httpErrorMessage(status, body, lang) {
 
 function offlineReply(lang) {
   const m = {
-    "ko-KR": "오프라인 모드예요. 설정에서 NVIDIA API 키를 넣으면 정확히 답할 수 있어요.",
-    "ja-JP": "オフラインです。設定でNVIDIA APIキーを入れると正確に答えられます。",
-    "zh-CN": "当前离线。在设置中填入 NVIDIA API 密钥后我能准确回答。",
-    "en-US": "I'm offline right now, sir. Add your NVIDIA API key in Settings and I'll answer with full accuracy.",
+    "ko-KR": "오프라인 모드예요. 설정에서 ‘오프라인 우선’을 끄면 온라인으로 답할 수 있어요.",
+    "ja-JP": "オフラインモードです。設定で「オフライン優先」をオフにすればオンラインで答えます。",
+    "zh-CN": "当前为离线模式。在设置中关闭“优先离线”即可联网回答。",
+    "en-US": "I'm in offline mode, sir. Turn off “Prefer offline” in Settings and I'll answer online.",
   };
   return m[lang] || m["en-US"];
 }
