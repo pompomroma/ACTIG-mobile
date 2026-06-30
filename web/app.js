@@ -90,9 +90,78 @@ let wakeRec = null, recording = null, speechMod = null;
    listens only for the wake word, then (once awake) feeds everything you say to
    the AI — until you mute it by button, voice, or text. */
 let micOn = false, awake = false, listenStream = null, listenAbort = false;
+let audioCtx = null, analyser = null;          // Web Audio, for silence detection (VAD)
 
 async function speech() { return (speechMod ??= await import("./speech.js")); }
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
+
+/* iOS only lets speech synthesis AND Web Audio start from inside a user gesture.
+   Call this synchronously in the mic/⚡ tap handlers (before any await) to unlock
+   both — otherwise the spoken reply is silently blocked and VAD can't run. */
+function unlockAudio() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) { audioCtx = audioCtx || new Ctx(); if (audioCtx.state === "suspended") audioCtx.resume(); }
+  } catch {}
+  try {
+    if ("speechSynthesis" in window) {          // prime TTS with a silent utterance
+      const u = new SpeechSynthesisUtterance(" "); u.volume = 0;
+      speechSynthesis.speak(u);
+    }
+  } catch {}
+}
+
+/* Attach a Web Audio analyser to the mic stream so we can measure loudness for
+   voice-activity (silence) detection. Not connected to the speakers (no echo). */
+function makeAnalyser(stream) {
+  try {
+    if (!audioCtx) { const Ctx = window.AudioContext || window.webkitAudioContext; if (Ctx) audioCtx = new Ctx(); }
+    if (!audioCtx) return null;
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const src = audioCtx.createMediaStreamSource(stream);
+    const an = audioCtx.createAnalyser();
+    an.fftSize = 1024;
+    src.connect(an);
+    return an;
+  } catch { return null; }
+}
+
+/* Current RMS loudness (0..~1) from the analyser. */
+function micLevel(an) {
+  const data = new Uint8Array(an.fftSize);
+  an.getByteTimeDomainData(data);
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+  return Math.sqrt(sum / data.length);
+}
+
+/* Drive a recording with voice-activity detection: stop it automatically once the
+   speaker has talked and then gone quiet for `silenceMs`. Resolves true if speech
+   was heard (worth transcribing), false if the window passed in silence.
+   Falls back to a fixed window when no analyser is available. */
+function recordWithVAD(rec, an, { silenceMs = 1000, preSpeechMs = 6000, maxMs = 15000, speechRms = 0.03, silenceRms = 0.02 } = {}) {
+  if (!an) { setTimeout(() => { try { rec.stop(); } catch {} }, awake ? 7000 : 4000); return Promise.resolve(true); }
+  return new Promise((resolve) => {
+    const start = performance.now();
+    let speechStarted = false, lastVoice = start, done = false;
+    const finish = (heard) => { if (done) return; done = true; try { rec.stop(); } catch {} resolve(heard); };
+    const tick = () => {
+      if (done) return;
+      if (!micOn || listenAbort) return finish(speechStarted);
+      const rms = micLevel(an);
+      const now = performance.now();
+      if (rms > speechRms) {
+        if (!speechStarted) { speechStarted = true; setStatus(awake ? "Listening…" : 'Say “wake up ACTIG”'); }
+        lastVoice = now;
+      }
+      if (!speechStarted && now - start > preSpeechMs) return finish(false);          // nothing said
+      if (speechStarted && rms < silenceRms && now - lastVoice > silenceMs) return finish(true); // end of turn
+      if (now - start > maxMs) return finish(speechStarted);                          // safety cap
+      setTimeout(tick, 60);
+    };
+    tick();
+  });
+}
 
 /* Tolerant wake-word match: on-device Whisper often mishears the coined word
    "ACTIG" (e.g. "active", "at tig"), so accept any "wake up …" phrasing. */
@@ -120,6 +189,7 @@ async function acquireMic() {
    command, turns it off). Must run inside the tap gesture for iOS. */
 async function toggleMic() {
   if (micOn) { stopMic("Mic off"); return; }
+  unlockAudio();                               // unlock TTS + Web Audio in-gesture (iOS)
   userMuted = false; $("micUser").classList.remove("muted-on");
   const stream = await acquireMic();          // getUserMedia initiated in-gesture
   if (stream) startMic(stream);
@@ -138,7 +208,8 @@ function startMic(stream) {
     startWakeRecognition();                    // Android/desktop: native continuous recognition
   } else {
     listenStream = stream;
-    listenLoop(stream);                         // iOS: chunked on-device Whisper loop
+    analyser = makeAnalyser(stream);            // for silence detection (auto end-of-turn)
+    listenLoop(stream);                         // iOS: continuous on-device Whisper loop
   }
 }
 
@@ -148,6 +219,7 @@ function stopMic(status) {
   if (recording) { try { recording.stop(); } catch {} }
   if (wakeRec) { try { wakeRec.onend = null; wakeRec.stop(); } catch {} wakeRec = null; }
   if (listenStream) { try { listenStream.getTracks().forEach(t => t.stop()); } catch {} listenStream = null; }
+  analyser = null;                              // audioCtx is kept (reused next time)
   setMicActive(false);
   setStatus(status || "Mic off");
 }
@@ -181,25 +253,31 @@ function startWakeRecognition() {
   } catch { listenLoop(listenStream); }       // fall back to the Whisper loop
 }
 
-/* iOS path: keep the one stream open and loop record → transcribe. Before the
-   wake word we only watch for it; after, each window is sent to the AI. */
+/* iOS path: keep the one stream open and continuously record → transcribe. Each
+   turn auto-ends when you stop speaking (silence detection), so you never have to
+   stop the mic. Before the wake word we only watch for it; after, your speech is
+   sent to the AI. */
 async function listenLoop(stream) {
   let sp;
   try { sp = await speech(); }
   catch (e) { stopMic("Voice unavailable"); addBubble("sys", "Couldn't load the speech model: " + (e?.message || e)); return; }
   while (micOn && !listenAbort) {
-    if (speaking) { await delay(250); continue; }   // don't record ACTIG's own voice
+    if (speaking) { await delay(150); continue; }   // wait while ACTIG is speaking (no self-record)
     let text = "";
     try {
-      recording = sp.recordStream(stream, { maxMs: awake ? 7000 : 4000, keepAlive: true, onStatus: setStatus });
+      recording = sp.recordStream(stream, { maxMs: 16000, keepAlive: true, onStatus: setStatus });
+      setStatus(awake ? "Listening…" : 'Say “wake up ACTIG”');
+      const heard = await recordWithVAD(recording, analyser); // auto-stops on end of speech
       const blob = await recording.done;
       recording = null;
       if (!micOn || listenAbort) break;
+      if (!heard) continue;                            // window passed in silence — listen again
+      setStatus("Transcribing…");
       text = await sp.transcribeBlob(blob, "auto", setStatus);
     } catch (e) {
       recording = null;
       if (!micOn || listenAbort) break;
-      await delay(400); continue;                    // transient error — keep listening
+      await delay(300); continue;                      // transient error — keep listening
     }
     if (!micOn || listenAbort) break;
     if (!text) { setStatus(awake ? "Listening…" : 'Say “wake up ACTIG”'); continue; }
@@ -207,7 +285,7 @@ async function listenLoop(stream) {
       if (isWake(text)) becomeAwake();
       else setStatus('Say “wake up ACTIG”');
     } else {
-      await submit(text, "voice");                    // await so we don't talk over the reply
+      await submit(text, "voice");                     // await so we don't talk over the reply
     }
   }
 }
@@ -218,6 +296,7 @@ function setMicActive(on) {
 
 /* Wake (⚡): turn the mic on (if needed) and skip straight to awake. */
 async function wake() {
+  unlockAudio();                               // unlock TTS + Web Audio in-gesture (iOS)
   userMuted = false; $("micUser").classList.remove("muted-on");
   if (!micOn) {
     const stream = await acquireMic();          // mic acquired in-gesture
