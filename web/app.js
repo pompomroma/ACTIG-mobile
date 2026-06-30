@@ -7,20 +7,29 @@
 const WAKE = "wake up actig";
 const REACTION = "ACTIG at your service sir";
 // Primary brain: NVIDIA Nemotron via the OpenAI-compatible NIM endpoint.
-const LLM_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions";
-const DEFAULT_MODEL = "nemotron-3-ultra-550b-a55b";
+// NOTE: integrate.api.nvidia.com is a server-to-server API and does NOT send
+// browser CORS headers, so a PWA can't call it directly — set a CORS proxy URL
+// in Settings (see web/proxy/cloudflare-worker.js) to make voice/chat work.
+const DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions";
+// Valid, generally-available NIM model id (the old "nemotron-3-ultra-550b-a55b"
+// was not a real model and made every request fail).
+const DEFAULT_MODEL = "nvidia/llama-3.1-nemotron-70b-instruct";
 // Built-in NVIDIA API key so the app answers with full accuracy out of the box —
-// no Settings step needed. A key typed in Settings overrides this one.
+// no Settings step needed. A key typed in Settings overrides this one. (A key
+// committed to a public repo can be auto-revoked by NVIDIA — if you get a 401,
+// paste a fresh key in Settings.)
 const BUILTIN_KEY = "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";
 
 const $ = (id) => document.getElementById(id);
 const store = {
-  get key() { return localStorage.getItem("actig.key") || BUILTIN_KEY; },
-  set key(v) { localStorage.setItem("actig.key", v); },
+  get key() { return (localStorage.getItem("actig.key") || BUILTIN_KEY).trim(); },
+  set key(v) { localStorage.setItem("actig.key", (v || "").trim()); },
+  get endpoint() { return (localStorage.getItem("actig.endpoint") || DEFAULT_ENDPOINT).trim(); },
+  set endpoint(v) { localStorage.setItem("actig.endpoint", (v || "").trim() || DEFAULT_ENDPOINT); },
   get offline() { return localStorage.getItem("actig.offline") === "1"; },
   set offline(v) { localStorage.setItem("actig.offline", v ? "1" : "0"); },
-  get model() { return localStorage.getItem("actig.model") || DEFAULT_MODEL; },
-  set model(v) { localStorage.setItem("actig.model", v || DEFAULT_MODEL); },
+  get model() { return (localStorage.getItem("actig.model") || DEFAULT_MODEL).trim(); },
+  set model(v) { localStorage.setItem("actig.model", (v || "").trim() || DEFAULT_MODEL); },
   get history() { try { return JSON.parse(localStorage.getItem("actig.history") || "[]"); } catch { return []; } },
   set history(v) { localStorage.setItem("actig.history", JSON.stringify(v.slice(-400))); },
 };
@@ -220,6 +229,8 @@ function systemPrompt(lang) {
    the whole 550B generation finishes — the single biggest perceived-speed win. */
 async function callLLM(history, lang, onToken) {
   const key = store.key;
+  // Only the user's explicit "prefer offline" choice (or a truly empty key)
+  // forces the canned offline reply — real failures get a specific message.
   if (!key || store.offline) return offlineReply(lang);
   try {
     // OpenAI-compatible chat completion (NVIDIA NIM). System prompt is the first
@@ -229,12 +240,15 @@ async function callLLM(history, lang, onToken) {
       history.filter(m => m.role !== "sys")
         .map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }))
     );
-    const res = await fetch(LLM_ENDPOINT, {
+    const res = await fetch(store.endpoint, {
       method: "POST",
       headers: { "content-type": "application/json", "authorization": "Bearer " + key },
       body: JSON.stringify({ model: store.model, messages: msgs, max_tokens: 1024, temperature: 0.6, stream: true }),
     });
-    if (!res.ok) return `(${res.status}) ` + (await res.text()).slice(0, 200);
+    if (!res.ok) {
+      const body = (await res.text().catch(() => "")).slice(0, 240);
+      return httpErrorMessage(res.status, body, lang);
+    }
     // Fall back to a plain read if the runtime can't expose a stream body.
     if (!res.body || !res.body.getReader) {
       const data = await res.json();
@@ -263,9 +277,26 @@ async function callLLM(history, lang, onToken) {
     }
     return full || offlineReply(lang);
   } catch (e) {
-    // Browsers may block cross-origin API calls (CORS); fall back gracefully.
-    return offlineReply(lang) + ` (network/CORS: ${e.message})`;
+    // A thrown fetch in the browser is almost always CORS: NVIDIA's API has no
+    // CORS headers, so a direct PWA call is blocked. Point Settings at a proxy.
+    const direct = store.endpoint.includes("integrate.api.nvidia.com");
+    return direct
+      ? "⚠️ The browser blocked the request to NVIDIA (CORS). NVIDIA's API can't be called directly from a web app. "
+        + "Open Settings ▸ API endpoint and paste your CORS-proxy URL (see web/proxy/cloudflare-worker.js), then Save. "
+        + `(${e.message})`
+      : `⚠️ Couldn't reach the API endpoint. Check the endpoint URL in Settings. (${e.message})`;
   }
+}
+
+/* Turn an HTTP failure into a clear, actionable line instead of a vague "offline". */
+function httpErrorMessage(status, body, lang) {
+  if (status === 401 || status === 403)
+    return `⚠️ API key rejected (HTTP ${status}). The key is missing, wrong, or was revoked — paste a valid NVIDIA key in Settings and Save. ${body}`;
+  if (status === 404 || status === 400)
+    return `⚠️ The model id looks wrong (HTTP ${status}). Set a valid model in Settings (default: ${DEFAULT_MODEL}). ${body}`;
+  if (status === 429)
+    return `⚠️ Rate-limited (HTTP 429). Wait a moment and try again. ${body}`;
+  return `⚠️ AI request failed (HTTP ${status}). ${body || offlineReply(lang)}`;
 }
 
 function offlineReply(lang) {
@@ -404,8 +435,16 @@ function boot() {
   // restore transcript
   messages.forEach(m => addBubble(m.role === "user" ? "user" : "ai", m.text, m.options, m.suggestions));
   // settings
-  $("apiKey").value = store.key; $("preferOffline").checked = store.offline; $("model").value = store.model;
-  $("saveKey").onclick = () => { store.key = $("apiKey").value.trim(); store.model = $("model").value.trim(); store.offline = $("preferOffline").checked; setStatus("Saved"); };
+  $("apiKey").value = store.key; $("preferOffline").checked = store.offline;
+  $("model").value = store.model; $("endpoint").value = store.endpoint;
+  $("saveKey").onclick = () => {
+    store.key = $("apiKey").value;
+    store.model = $("model").value;
+    store.endpoint = $("endpoint").value;
+    store.offline = $("preferOffline").checked;
+    $("model").value = store.model; $("endpoint").value = store.endpoint; // reflect defaults
+    setStatus("Saved");
+  };
   $("clearHistory").onclick = () => { messages = []; persist(); $("transcript").innerHTML = ""; };
   // input
   $("send").onclick = send; $("draft").addEventListener("keydown", e => { if (e.key === "Enter") send(); });

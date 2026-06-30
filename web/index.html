@@ -48,10 +48,16 @@
           <input id="apiKey" type="password" placeholder="nvapi-..." autocomplete="off" />
         </label>
         <label>Model
-          <input id="model" type="text" placeholder="nemotron-3-ultra-550b-a55b" autocomplete="off" />
+          <input id="model" type="text" placeholder="nvidia/llama-3.1-nemotron-70b-instruct" autocomplete="off" />
+        </label>
+        <label>API endpoint (use a CORS proxy in the browser — see web/proxy)
+          <input id="endpoint" type="text" placeholder="https://integrate.api.nvidia.com/v1/chat/completions" autocomplete="off" />
         </label>
         <label><input id="preferOffline" type="checkbox" /> Prefer offline (no cloud)</label>
         <button id="saveKey" class="chip">Save</button>
+        <p class="muted">Browsers block direct calls to NVIDIA (CORS). For voice/chat
+        in this web app, deploy the free proxy in <code>web/proxy/cloudflare-worker.js</code>
+        and paste its URL above.</p>
         <h3>Wake & reaction</h3>
         <p class="muted">Wake phrase: “wake up ACTIG” · Reaction: “ACTIG at your service sir”</p>
         <h3>What the web app can/can't do</h3>

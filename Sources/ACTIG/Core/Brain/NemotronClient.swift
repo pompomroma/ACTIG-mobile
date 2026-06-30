@@ -10,8 +10,9 @@ import Foundation
 /// previous Claude setup — only the transport/model changed.
 final class NemotronClient: BrainEngine, @unchecked Sendable {
     /// Default model id (override per-build or via Settings if your account
-    /// exposes a different identifier).
-    static let defaultModel = "nemotron-3-ultra-550b-a55b"
+    /// exposes a different identifier). Must be a real NIM model — the old
+    /// "nemotron-3-ultra-550b-a55b" did not exist and every request failed.
+    static let defaultModel = "nvidia/llama-3.1-nemotron-70b-instruct"
 
     private let model: String
     private let session: URLSession
