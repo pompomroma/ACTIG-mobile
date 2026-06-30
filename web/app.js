@@ -229,8 +229,10 @@ async function wake() {
 
 /* ---------- brain ---------- */
 function systemPrompt(lang) {
-  return `You are ACTIG, a witty, warm JARVIS-style assistant. Reply naturally in ${lang}. `
-    + `When useful, end with:\n<<OPTIONS>>\n- option\n<<SUGGESTIONS>>\n- recommendation`;
+  return `You are ACTIG, a witty, warm JARVIS-style assistant. Reply in ${lang}. `
+    + `Keep answers short, natural and conversational — like spoken dialogue, usually 1-3 sentences. `
+    + `Get to the point; expand only when asked. `
+    + `When genuinely useful, end with:\n<<OPTIONS>>\n- option\n<<SUGGESTIONS>>\n- recommendation`;
 }
 
 /* Streaming chat completion. Tokens are pushed to `onToken(delta, full)` as they
@@ -244,87 +246,125 @@ async function callLLM(history, lang, onToken) {
   // endpoints that actually need one (NVIDIA). Real failures get a specific msg.
   if (store.offline) return offlineReply(lang);
   if (!keyless && !key) return offlineReply(lang);
-  try {
-    // OpenAI-compatible chat completion. System prompt is the first message; the
-    // tool/options protocol is prompt-based so behaviour matches across providers.
-    const msgs = [{ role: "system", content: systemPrompt(lang) }].concat(
-      history.filter(m => m.role !== "sys")
-        .map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }))
-    );
-    const headers = { "content-type": "application/json" };
-    if (!keyless && key) headers["authorization"] = "Bearer " + key;
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ model: store.model, messages: msgs, max_tokens: 1024, temperature: 0.6, stream: true }),
-    });
-    if (!res.ok) {
-      // For the keyless default, retry via the simple GET API before giving up.
-      if (keyless) return await pollinationsGet(history, lang, onToken);
-      const body = (await res.text().catch(() => "")).slice(0, 240);
-      return httpErrorMessage(res.status, body, lang);
+
+  if (keyless) {
+    // Keyless default: the streaming GET is the fastest reliable browser path —
+    // it's a CORS "simple request" (no preflight round-trip) AND streams tokens.
+    // Only if it fails do we try the POST form.
+    try { return await pollinationsGet(history, lang, onToken); }
+    catch (e1) {
+      try { return await openaiPost(endpoint, history, lang, onToken, ""); }
+      catch (e2) { return `⚠️ Couldn't reach the AI right now (${shortErr(e1)}). It may be busy — try again in a moment.`; }
     }
-    // Fall back to a plain read if the runtime can't expose a stream body.
-    if (!res.body || !res.body.getReader) {
-      const data = await res.json().catch(() => null);
-      const full = data?.choices?.[0]?.message?.content || data?.message?.content || "";
-      if (full) { onToken?.(full, full); return full; }
-      return keyless ? await pollinationsGet(history, lang, onToken) : offlineReply(lang);
-    }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "", full = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
-        if (!line.startsWith("data:")) continue;
-        const payload = line.slice(5).trim();
-        if (!payload || payload === "[DONE]") continue;
-        try {
-          const delta = JSON.parse(payload)?.choices?.[0]?.delta?.content || "";
-          if (delta) { full += delta; onToken?.(delta, full); }
-        } catch {}
-      }
-    }
-    if (full) return full;
-    return keyless ? await pollinationsGet(history, lang, onToken) : offlineReply(lang);
-  } catch (e) {
-    // A thrown fetch in the browser is almost always CORS. For the keyless
-    // default, fall back to the GET API (a "simple" request: no preflight, so it
-    // sails through CORS). For NVIDIA, direct calls can't work — point to a proxy.
-    if (keyless) {
-      try { return await pollinationsGet(history, lang, onToken); } catch {}
-    }
+  }
+  // Keyed providers (e.g. NVIDIA via your proxy).
+  try { return await openaiPost(endpoint, history, lang, onToken, key); }
+  catch (e) {
+    if (e.status) return httpErrorMessage(e.status, e.body || "", lang);
     const direct = endpoint.includes("integrate.api.nvidia.com");
     return direct
       ? "⚠️ The browser blocked the request to NVIDIA (CORS). NVIDIA's API can't be called directly from a web app. "
         + "Open Settings ▸ API endpoint and paste your CORS-proxy URL (see web/proxy/cloudflare-worker.js), then Save. "
-        + `(${e.message})`
-      : `⚠️ Couldn't reach the AI. Check Settings ▸ API endpoint, or try again. (${e.message})`;
+        + `(${shortErr(e)})`
+      : `⚠️ Couldn't reach the AI endpoint. Check Settings, or try again. (${shortErr(e)})`;
   }
 }
 
-/* Pollinations' simple GET text API. A GET with no custom headers is a CORS
-   "simple request" — no preflight — so it works from any browser page even when
-   the streaming POST is blocked. Returns the whole reply at once (no streaming).
-   Recent turns are flattened into one prompt; GET URLs have a length limit, so we
-   only send the last few messages. */
+const shortErr = (e) => (e && (e.message || e.name)) || String(e);
+
+/* Read a streamed fetch body token-by-token, calling onToken(delta, full) as text
+   arrives. Handles both OpenAI-style SSE ("data: {json}") and a plain text stream,
+   so it works across providers. Returns the full text. */
+async function readStream(body, onToken) {
+  const reader = body.getReader();
+  const dec = new TextDecoder();
+  let buf = "", full = "", mode = null;        // 'sse' | 'raw', detected from the first chunk
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const chunk = dec.decode(value, { stream: true });
+    if (mode === null) mode = /(^|\n)\s*data:/.test(chunk) ? "sse" : "raw";
+    if (mode === "raw") { full += chunk; onToken?.(chunk, full); continue; }
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+      if (!line.startsWith("data:")) continue;
+      const p = line.slice(5).trim();
+      if (!p || p === "[DONE]") continue;
+      let delta = "";
+      try { delta = JSON.parse(p)?.choices?.[0]?.delta?.content || ""; }
+      catch { delta = p; }                      // payload wasn't JSON → treat as raw text
+      if (delta) { full += delta; onToken?.(delta, full); }
+    }
+  }
+  return full.trim();
+}
+
+/* Pollinations' GET text API — a CORS "simple request" (no preflight) so it works
+   from any browser page, with stream=true for token-by-token delivery. Recent turns
+   are flattened into one prompt (GET URLs have a length limit). Tries a couple of
+   URL variants for resilience. */
 async function pollinationsGet(history, lang, onToken) {
   const recent = history.filter(m => m.role !== "sys").slice(-6)
     .map(m => (m.role === "user" ? "User: " : "ACTIG: ") + m.text).join("\n");
   const prompt = (systemPrompt(lang) + "\n\n" + recent + "\nACTIG:").slice(-1800);
-  const url = "https://text.pollinations.ai/" + encodeURIComponent(prompt)
-    + "?model=" + encodeURIComponent(store.model || "openai") + "&referrer=actig-pwa";
-  const res = await fetch(url);                 // simple request — no preflight
-  if (!res.ok) throw new Error("pollinations GET " + res.status);
-  const text = (await res.text()).trim();
-  if (!text) throw new Error("empty reply");
-  onToken?.(text, text);
-  return text;
+  const enc = encodeURIComponent(prompt);
+  const model = encodeURIComponent(store.model || "openai");
+  const variants = [
+    `https://text.pollinations.ai/${enc}?model=${model}&stream=true&referrer=actig-pwa`, // streamed
+    `https://text.pollinations.ai/${enc}?model=${model}&referrer=actig-pwa`,             // plain
+    `https://text.pollinations.ai/${enc}`,                                               // bare
+  ];
+  let lastErr;
+  for (let i = 0; i < variants.length; i++) {
+    try {
+      const res = await fetch(variants[i]);     // simple request — no preflight
+      if (!res.ok) { lastErr = new Error("GET " + res.status); continue; }
+      if (i === 0 && res.body && res.body.getReader) {
+        const full = await readStream(res.body, onToken);
+        if (full) return full;
+        lastErr = new Error("empty stream"); continue;
+      }
+      const text = (await res.text()).trim();
+      if (!text) { lastErr = new Error("empty reply"); continue; }
+      onToken?.(text, text);
+      return text;
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("no response");
+}
+
+/* OpenAI-compatible streaming POST (NVIDIA via proxy, or Pollinations fallback).
+   Returns the reply text; throws on failure (with .status/.body for HTTP errors). */
+async function openaiPost(endpoint, history, lang, onToken, key) {
+  const msgs = [{ role: "system", content: systemPrompt(lang) }].concat(
+    history.filter(m => m.role !== "sys")
+      .map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }))
+  );
+  const headers = { "content-type": "application/json" };
+  if (key) headers["authorization"] = "Bearer " + key;
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ model: store.model, messages: msgs, max_tokens: 512, temperature: 0.6, stream: true }),
+  });
+  if (!res.ok) {
+    const err = new Error("HTTP " + res.status);
+    err.status = res.status;
+    err.body = (await res.text().catch(() => "")).slice(0, 240);
+    throw err;
+  }
+  if (!res.body || !res.body.getReader) {       // runtime can't expose a stream body
+    const data = await res.json().catch(() => null);
+    const full = data?.choices?.[0]?.message?.content || data?.message?.content || "";
+    if (!full) throw new Error("empty reply");
+    onToken?.(full, full);
+    return full;
+  }
+  const full = await readStream(res.body, onToken);
+  if (!full) throw new Error("empty reply");
+  return full;
 }
 
 /* Turn an HTTP failure into a clear, actionable line instead of a vague "offline". */
