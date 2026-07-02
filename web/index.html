@@ -12,6 +12,13 @@
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="styles.css" />
+  <!-- Single Three.js instance for the 3D studio + its addons (exporter, merge utils). -->
+  <script type="importmap">
+  {"imports":{
+    "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
+  }}
+  </script>
 </head>
 <body>
   <div id="app">
@@ -36,6 +43,11 @@
         <button data-shape="torus" class="chip">＋Torus</button>
         <button id="clone" class="chip">Clone</button>
         <button id="del" class="chip danger">Delete</button>
+        <button id="stretch" class="chip">↔ Stretch</button>
+        <button id="attachObj" class="chip" title="Choose objects to attach">🔗 Attach</button>
+        <button id="attachSubmit" class="chip">✅ Submit</button>
+        <button id="mesh" class="chip">🧊 Mesh</button>
+        <button id="exportGlb" class="chip">⬇ Export</button>
         <button id="gesture" class="chip">✋ Gestures</button>
       </div>
     </section>

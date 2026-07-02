@@ -951,6 +951,11 @@ function boot() {
   document.querySelectorAll("[data-shape]").forEach(b => b.onclick = () => { ensureStudio().then(() => studio?.spawn(b.dataset.shape)); });
   $("clone").onclick = () => studio?.clone();
   $("del").onclick = () => studio?.remove();
+  $("stretch").onclick = (e) => { ensureStudio().then(() => { const on = studio?.toggleStretch(); e.target.classList.toggle("on", on); setStatus(on ? "Stretch mode: drag to strain per-axis" : "Move mode"); }); };
+  $("attachObj").onclick = (e) => { ensureStudio().then(() => { studio?.beginAttach(); e.target.classList.add("on"); setStatus("Attach: tap objects to combine, then Submit"); }); };
+  $("attachSubmit").onclick = () => { ensureStudio().then(() => { const ok = studio?.submitAttach(); $("attachObj").classList.remove("on"); setStatus(ok ? "Attached into a group ✓ (tap 🧊 Mesh to merge)" : "Pick 2+ objects with Attach first"); }); };
+  $("mesh").onclick = () => { ensureStudio().then(() => studio?.mergeSelected().then(ok => setStatus(ok ? "Merged into one mesh ✓" : "Select a group/object to merge")).catch(err => addBubble("sys", "Merge failed: " + shortErr(err)))); };
+  $("exportGlb").onclick = () => { setStatus("Exporting .glb…"); ensureStudio().then(() => studio?.exportGLB().then(() => setStatus("Exported actig-model.glb ✓")).catch(err => addBubble("sys", "Export failed: " + shortErr(err)))); };
   $("gesture").onclick = (e) => { ensureStudio().then(() => { const on = studio?.toggleGestures(); e.target.classList.toggle("on", on); }); };
   // Vibe Build
   $("buildGo").onclick = () => { const v = $("buildSpec").value.trim(); if (v) { clearBuildEditMode(); runBuild(v, "text", "en-US"); } };

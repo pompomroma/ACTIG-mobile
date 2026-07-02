@@ -34,6 +34,10 @@ HARD RULES:
 
 Build EXACTLY what the user asks — complete, correct, optimized, and genuinely high quality.`;
 
+// Games must be *playable*, not title/screen mockups.
+const GAME_RE = /\b(game|gameplay|playable|arcade|snake|tetris|pong|platformer|shooter|puzzle|maze|flappy|breakout|invaders|runner|rpg|score|player|enemy|level|shoot|jump|dodge)\b/i;
+const GAME_REQ = `\n\nTHIS IS A GAME — it MUST be fully playable, never a title screen or mockup. Implement: a real game loop with requestAnimationFrame; responsive controls for BOTH keyboard (arrow keys / WASD / space) AND touch (on-screen buttons or swipe/tap); a player and entities that actually move with collision detection; scoring and increasing difficulty; clear win/lose states with a restart button. Any start screen must lead directly into real, interactive gameplay.`;
+
 const DESIGN_PROMPT = `Analyze the attached image(s) so a developer can faithfully reproduce them in a web app. Be concrete and structured. Cover: color palette (list hex values), typography (font families/weights/sizes/hierarchy), layout & spacing (grid, alignment, sizing), key components/controls, iconography & imagery style, overall theme/mood (light or dark), and any ANIMATION/motion shown or implied (transitions, easing, duration, hover/scroll effects, loops). If it's a UI mockup, describe each screen region. Output a concise design brief — no code.`;
 
 const EDITOR = `You are editing an EXISTING browser-only web app. Apply the user's requested change(s) to the given files. Preserve everything that already works; change only what the request needs. Keep it a complete, self-contained, runnable program: index.html entry point, libraries via CDN <script> tags, NO ES module imports between your own files. Return the COMPLETE updated project (every file in full).
@@ -135,8 +139,10 @@ export function createBuilder(deps) {
       try { checklist = await planChecklist(spec, ref); } catch {}
       save({});
     }
+    const isGame = GAME_RE.test(spec + " " + checklist.join(" "));
     const user = `Build this program:\n${spec}${ref}`
       + (checklist.length ? `\n\nIt MUST satisfy every item on this checklist:\n- ${checklist.join("\n- ")}` : "")
+      + (isGame ? GAME_REQ : "")
       + `\n\nRemember: index.html entry point, self-contained, runs in the browser.`;
 
     // 2) Generate candidate(s), evaluate each, keep the best.
@@ -153,7 +159,7 @@ export function createBuilder(deps) {
       candStart = c + 1;
       if (files["index.html"]) {
         onStatus?.("Testing candidate…");
-        const evalRes = await evaluate(files, checklist);
+        const evalRes = await evaluate(files, checklist, isGame);
         renderMetrics(evalRes, `Candidate ${c + 1}`);
         if (!best || evalRes.score > best.eval.score) best = { files, eval: evalRes };
       }
@@ -171,7 +177,7 @@ export function createBuilder(deps) {
       const files = parseFiles(repaired);
       repStart = i + 1;
       if (files["index.html"]) {
-        const evalRes = await evaluate(files, checklist);
+        const evalRes = await evaluate(files, checklist, isGame);
         const prev = best.eval.score;
         renderMetrics(evalRes, `Repair ${i + 1}: ${prev} → ${evalRes.score}`);
         if (evalRes.score > best.eval.score) { best = { files, eval: evalRes }; save({ candidatesDone: tier.candidates, repairsDone: repStart }); }
@@ -320,9 +326,10 @@ export function createBuilder(deps) {
     return run;
   }
   /* Score a candidate by running it + static checks. Returns {score,metrics,errors}. */
-  async function evaluate(files, checklist) {
+  async function evaluate(files, checklist, isGame = false) {
     const html = files["index.html"] || "";
     const combined = Object.values(files).join("\n").toLowerCase();
+    const codeAll = Object.values(files).join("\n");
     const run = await runInFrame(files);
     const errors = (run.errors || []).filter(Boolean);
     const metrics = [];
@@ -347,6 +354,11 @@ export function createBuilder(deps) {
       add("Substantial implementation", html.length > 1200, 15);
     }
     add("Reasonable size", html.length > 400, 5);
+    if (isGame) {                                     // a game must actually be playable
+      const hasLoop = /requestAnimationFrame|setInterval/.test(codeAll);
+      const hasInput = /(keydown|keyup|keypress|pointerdown|touchstart|onkeydown)/i.test(codeAll);
+      add("Playable (game loop + controls)", hasLoop && hasInput, 20);
+    }
     const totW = metrics.reduce((s, m) => s + m.weight, 0) || 1;
     const gotW = metrics.reduce((s, m) => s + (m.pass ? m.weight : 0), 0);
     return { score: Math.round((gotW / totW) * 100), metrics, errors };
@@ -443,8 +455,9 @@ export function createBuilder(deps) {
     if (!last) throw new Error("open or generate a program first, then request a change");
     const tier = TIERS[deps.store.quality] || TIERS.max;
     const ctx = atts.length ? await analyzeContext(atts, onStatus) : "";
+    const isGame = GAME_RE.test(lastSpec + " " + request);
     const filesBlock = Object.entries(last.files).map(([p, c]) => `===FILE: ${p}===\n${c}`).join("\n");
-    const user = `Current program:\n${filesBlock}\n\nRequested change:\n${request}${ctx ? `\n\nAttached references to use:${ctx}` : ""}\n\nReturn the COMPLETE updated project.`;
+    const user = `Current program:\n${filesBlock}\n\nRequested change:\n${request}${ctx ? `\n\nAttached references to use:${ctx}` : ""}${isGame ? GAME_REQ : ""}\n\nReturn the COMPLETE updated project.`;
     onStatus?.("Applying change…");
     const raw = await deps.llmGenerate(EDITOR, user, {
       onToken: (_d, full) => onStatus?.(`Editing… ${full.length.toLocaleString()} chars`),
@@ -453,13 +466,13 @@ export function createBuilder(deps) {
     let files = parseFiles(raw);
     if (!files["index.html"]) throw new Error("the edit didn't return a valid program — try rephrasing");
     onStatus?.("Testing…");
-    let evalRes = await evaluate(files, []);
+    let evalRes = await evaluate(files, [], isGame);
     renderMetrics(evalRes, "Edited");
     if (tier.repairs > 0 && evalRes.score < 100) {          // one light repair pass for edits
       onStatus?.("Repairing…");
       try {
         const f2 = parseFiles(await repairOnce(files, evalRes, []));
-        if (f2["index.html"]) { const e2 = await evaluate(f2, []); if (e2.score >= evalRes.score) { files = f2; evalRes = e2; renderMetrics(evalRes, "Edited (repaired)"); } }
+        if (f2["index.html"]) { const e2 = await evaluate(f2, [], isGame); if (e2.score >= evalRes.score) { files = f2; evalRes = e2; renderMetrics(evalRes, "Edited (repaired)"); } }
       } catch {}
     }
     revokeLast();

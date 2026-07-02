@@ -1,8 +1,9 @@
-/* ACTIG 3D studio (web) — Three.js loaded from CDN. Iron-Man-style space:
-   spawn shapes, drag with finger/mouse, pinch/scroll to scale, clone, delete,
-   and optional camera hand-gesture control (MediaPipe). Loaded lazily by app.js. */
+/* ACTIG 3D studio (web) — Three.js (via import map) Iron-Man-style space:
+   spawn shapes, drag to move, pinch/wheel to scale, per-axis STRETCH (strain),
+   ATTACH objects into a group then MERGE into one mesh, EXPORT the project to GLB,
+   and camera hand control (MediaPipe) that can SELECT, drag, and strain objects. */
 
-import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
+import * as THREE from "three";
 
 export async function createStudio(host) {
   const scene = new THREE.Scene();
@@ -17,11 +18,17 @@ export async function createStudio(host) {
   host.appendChild(renderer.domElement);
 
   scene.add(new THREE.AmbientLight(0x88ccff, 0.6));
-  const key = new THREE.DirectionalLight(0xffffff, 1.4); key.position.set(3, 5, 4); scene.add(key);
+  const keyLight = new THREE.DirectionalLight(0xffffff, 1.4); keyLight.position.set(3, 5, 4); scene.add(keyLight);
   const grid = new THREE.GridHelper(20, 20, 0x1d6f9c, 0x123); grid.position.y = -2; scene.add(grid);
 
-  const objects = [];
+  const objects = [];              // top-level entities (meshes or groups)
   let selected = null;
+  let stretchMode = false;
+  let attachMode = false;
+  const attachSet = new Set();
+
+  const BASE = 0x0a3550, SEL = 0x2da0ff, ATT = 0xff9a3c;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
   const mat = () => new THREE.MeshStandardMaterial({
     color: 0x45c7ff, emissive: 0x0a3550, metalness: 0.6, roughness: 0.2,
@@ -38,6 +45,15 @@ export async function createStudio(host) {
     }
   }
 
+  /* ---- highlight / selection ---- */
+  function setEmissive(entity, hex) {
+    entity.traverse(o => { if (o.isMesh && o.material?.emissive) o.material.emissive.setHex(hex); });
+  }
+  function refreshHighlights() {
+    for (const e of objects) setEmissive(e, attachSet.has(e) ? ATT : (e === selected ? SEL : BASE));
+  }
+  function select(entity) { selected = entity || null; refreshHighlights(); }
+
   function spawn(kind) {
     const m = new THREE.Mesh(geom(kind), mat());
     m.position.set((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 2, 0);
@@ -45,74 +61,141 @@ export async function createStudio(host) {
     scene.add(m); objects.push(m); select(m);
     return m;
   }
-  function select(m) {
-    if (selected) selected.material.emissive.setHex(0x0a3550);
-    selected = m;
-    if (m) m.material.emissive.setHex(0x2da0ff);
-  }
   function clone() {
     if (!selected) return;
-    const m = new THREE.Mesh(selected.geometry.clone(), selected.material.clone());
-    m.position.copy(selected.position).add(new THREE.Vector3(1.4, 0, 0));
-    m.userData.kind = selected.userData.kind;
-    scene.add(m); objects.push(m); select(m);
+    const c = selected.clone(true);
+    c.traverse(o => { if (o.isMesh) o.material = o.material.clone(); });
+    c.position.x += 1.4;
+    scene.add(c); objects.push(c); select(c);
   }
   function remove() {
     if (!selected) return;
     scene.remove(selected); objects.splice(objects.indexOf(selected), 1);
-    selected = null;
+    attachSet.delete(selected); selected = null; refreshHighlights();
   }
 
-  /* ---- touch / mouse: drag to move, pinch / wheel to scale ---- */
+  /* ---- picking (map a hit child up to its top-level entity) ---- */
   const ray = new THREE.Raycaster(); const ptr = new THREE.Vector2();
-  let dragging = false; const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-  const hit = new THREE.Vector3();
+  const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0); const hit = new THREE.Vector3();
+  let dragging = false, startCX = 0, startCY = 0, startScale = new THREE.Vector3();
 
-  function toNdc(x, y) {
+  function rootOf(obj) { let n = obj; while (n && n.parent && n.parent !== scene) n = n.parent; return objects.includes(n) ? n : null; }
+  function pickAt(nx, ny) {
+    ptr.set(nx, ny); ray.setFromCamera(ptr, camera);
+    const hits = ray.intersectObjects(objects, true);
+    return hits[0] ? rootOf(hits[0].object) : null;
+  }
+  function ndcFromClient(x, y) {
     const r = renderer.domElement.getBoundingClientRect();
-    ptr.set(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
+    return [((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1];
   }
-  function pick() {
-    ray.setFromCamera(ptr, camera);
-    const hits = ray.intersectObjects(objects, false);
-    return hits[0]?.object || null;
+  function moveEntityToNdc(entity, nx, ny) {
+    ptr.set(nx, ny); ray.setFromCamera(ptr, camera);
+    plane.constant = -entity.position.z;
+    if (ray.ray.intersectPlane(plane, hit)) { entity.position.x = hit.x; entity.position.y = hit.y; }
   }
+  function strainSelected(dx, dy, base) {           // dx,dy in NDC-ish units
+    if (!selected) return;
+    selected.scale.x = clamp(base.x * (1 + dx * 1.6), 0.1, 8);
+    selected.scale.y = clamp(base.y * (1 + dy * 1.6), 0.1, 8);
+  }
+
   renderer.domElement.addEventListener("pointerdown", (e) => {
-    toNdc(e.clientX, e.clientY); const o = pick();
-    if (o) { select(o); dragging = true; renderer.domElement.setPointerCapture(e.pointerId); }
+    const [nx, ny] = ndcFromClient(e.clientX, e.clientY);
+    const entity = pickAt(nx, ny);
+    if (attachMode) {                                // tap toggles attach-selection
+      if (entity) { attachSet.has(entity) ? attachSet.delete(entity) : attachSet.add(entity); refreshHighlights(); }
+      return;
+    }
+    if (entity) {
+      select(entity); dragging = true;
+      startCX = e.clientX; startCY = e.clientY; startScale.copy(entity.scale);
+      renderer.domElement.setPointerCapture(e.pointerId);
+    }
   });
   renderer.domElement.addEventListener("pointermove", (e) => {
     if (!dragging || !selected) return;
-    toNdc(e.clientX, e.clientY); ray.setFromCamera(ptr, camera);
-    plane.constant = -selected.position.z;
-    if (ray.ray.intersectPlane(plane, hit)) { selected.position.x = hit.x; selected.position.y = hit.y; }
+    if (stretchMode) {
+      const r = renderer.domElement.getBoundingClientRect();
+      strainSelected((e.clientX - startCX) / r.width * 2, -(e.clientY - startCY) / r.height * 2, startScale);
+    } else {
+      const [nx, ny] = ndcFromClient(e.clientX, e.clientY);
+      moveEntityToNdc(selected, nx, ny);
+    }
   });
   const endDrag = () => { dragging = false; };
   renderer.domElement.addEventListener("pointerup", endDrag);
   renderer.domElement.addEventListener("pointercancel", endDrag);
   renderer.domElement.addEventListener("wheel", (e) => {
     if (!selected) return; e.preventDefault();
-    const s = Math.max(0.2, Math.min(6, selected.scale.x * (e.deltaY < 0 ? 1.08 : 0.93)));
-    selected.scale.setScalar(s);
+    const f = e.deltaY < 0 ? 1.08 : 0.93;
+    if (stretchMode) selected.scale.z = clamp(selected.scale.z * f, 0.1, 8);
+    else selected.scale.multiplyScalar(f).clampScalar(0.1, 8);
   }, { passive: false });
-  // two-finger pinch scale
+  // two-finger pinch: uniform scale (or Z in stretch mode)
   let pinch0 = 0;
   renderer.domElement.addEventListener("touchmove", (e) => {
     if (e.touches.length === 2 && selected) {
-      const dx = e.touches[0].clientX - e.touches[1].clientX;
-      const dy = e.touches[0].clientY - e.touches[1].clientY;
-      const d = Math.hypot(dx, dy);
+      const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
       if (pinch0) {
-        const s = Math.max(0.2, Math.min(6, selected.scale.x * (d / pinch0)));
-        selected.scale.setScalar(s);
+        const r = d / pinch0;
+        if (stretchMode) selected.scale.z = clamp(selected.scale.z * r, 0.1, 8);
+        else selected.scale.multiplyScalar(r).clampScalar(0.1, 8);
       }
       pinch0 = d;
     }
   }, { passive: true });
   renderer.domElement.addEventListener("touchend", () => { pinch0 = 0; });
 
-  /* ---- optional camera hand gestures (MediaPipe, lazy) ---- */
-  let gesturesOn = false, handLandmarker = null, video = null, rafId = 0;
+  /* ---- modes: stretch, attach, merge, export ---- */
+  function toggleStretch() { stretchMode = !stretchMode; return stretchMode; }
+  function beginAttach() { attachMode = true; attachSet.clear(); refreshHighlights(); return true; }
+  function submitAttach() {
+    if (!attachMode) return false;
+    if (attachSet.size < 2) { attachMode = false; attachSet.clear(); refreshHighlights(); return false; }
+    const group = new THREE.Group(); scene.add(group);
+    for (const e of attachSet) { group.attach(e); const i = objects.indexOf(e); if (i >= 0) objects.splice(i, 1); }
+    objects.push(group); attachMode = false; attachSet.clear(); select(group);
+    return true;
+  }
+  async function mergeSelected() {
+    if (!selected) return false;
+    const meshes = []; selected.updateMatrixWorld(true);
+    selected.traverse(o => { if (o.isMesh) meshes.push(o); });
+    if (meshes.length < 1) return false;
+    const { mergeGeometries } = await import("three/addons/utils/BufferGeometryUtils.js");
+    const geoms = meshes.map(m => { const g = m.geometry.clone(); g.applyMatrix4(m.matrixWorld); return g.index ? g.toNonIndexed() : g; });
+    const merged = mergeGeometries(geoms, false);
+    if (!merged) return false;
+    merged.computeVertexNormals();
+    merged.computeBoundingBox();
+    const c = new THREE.Vector3(); merged.boundingBox.getCenter(c);
+    merged.translate(-c.x, -c.y, -c.z);                 // center pivot
+    const mesh = new THREE.Mesh(merged, mat()); mesh.position.copy(c); mesh.userData.kind = "mesh";
+    scene.remove(selected); objects.splice(objects.indexOf(selected), 1);
+    scene.add(mesh); objects.push(mesh); select(mesh);
+    return true;
+  }
+  async function exportGLB() {
+    const { GLTFExporter } = await import("three/addons/exporters/GLTFExporter.js");
+    const root = new THREE.Group();
+    for (const o of objects) root.add(o.clone(true));
+    const glb = await new Promise((res, rej) =>
+      new GLTFExporter().parse(root, res, rej, { binary: true }));
+    const blob = new Blob([glb], { type: "model/gltf-binary" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "actig-model.glb";
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    return true;
+  }
+
+  /* ---- camera hand control (MediaPipe) — select, drag, strain ---- */
+  let gesturesOn = false, handLandmarker = null, video = null, rafId = 0, usingRVFC = false;
+  const H = [ { pinch: false, x: 0, y: 0, seen: false }, { pinch: false, x: 0, y: 0, seen: false } ];
+  let grab = null, grabStartScale = new THREE.Vector3(), grabStart = { x: 0, y: 0 };
+  let two = null;                                   // two-hand strain session
+
   async function toggleGestures() {
     gesturesOn = !gesturesOn;
     if (gesturesOn) { try { await startHands(); } catch { gesturesOn = false; } }
@@ -123,32 +206,80 @@ export async function createStudio(host) {
     const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs");
     const fileset = await vision.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
     handLandmarker = await vision.HandLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" },
-      numHands: 1, runningMode: "VIDEO",
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+        delegate: "GPU",                             // faster than CPU
+      },
+      numHands: 2, runningMode: "VIDEO",             // two-hand cognition
     });
     video = document.createElement("video"); video.playsInline = true; video.muted = true;
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720}, frameRate: { ideal: 60 } },
+    });
     video.srcObject = stream; await video.play();
-    const loop = () => {
-      if (!gesturesOn) return;
-      const res = handLandmarker.detectForVideo(video, performance.now());
-      const lm = res.landmarks?.[0];
-      if (lm && selected) {
-        const thumb = lm[4], index = lm[8];
-        const pinch = Math.hypot(thumb.x - index.x, thumb.y - index.y) < 0.06;
-        if (pinch) { // map normalized coords to world-ish plane
-          selected.position.x = (0.5 - index.x) * 8;
-          selected.position.y = (0.5 - index.y) * 6;
-        }
-      }
-      rafId = requestAnimationFrame(loop);
+    usingRVFC = typeof video.requestVideoFrameCallback === "function";
+    const step = () => {
+      if (!gesturesOn || !video) return;
+      try { detect(); } catch {}
+      if (usingRVFC) video.requestVideoFrameCallback(step);
+      else rafId = requestAnimationFrame(step);
     };
-    loop();
+    if (usingRVFC) video.requestVideoFrameCallback(step); else rafId = requestAnimationFrame(step);
   }
   function stopHands() {
-    cancelAnimationFrame(rafId);
+    if (usingRVFC) usingRVFC = false; else cancelAnimationFrame(rafId);
     video?.srcObject?.getTracks().forEach(t => t.stop());
-    handLandmarker = null; video = null;
+    handLandmarker = null; video = null; grab = null; two = null;
+    H.forEach(h => { h.pinch = false; h.seen = false; });
+  }
+  function detect() {
+    if (!handLandmarker || !video) return;
+    const res = handLandmarker.detectForVideo(video, performance.now());
+    const lms = res.landmarks || [];
+    for (let i = 0; i < 2; i++) {
+      const lm = lms[i];
+      const h = H[i];
+      if (!lm) { h.seen = false; h.pinch = false; continue; }
+      const tip = lm[8], thumb = lm[4], wrist = lm[0], mcp = lm[9];
+      const nx = 1 - 2 * tip.x, ny = 1 - 2 * tip.y;    // mirror + to NDC
+      const a = 0.5;                                   // EMA smoothing
+      h.x = h.seen ? h.x + (nx - h.x) * a : nx;
+      h.y = h.seen ? h.y + (ny - h.y) * a : ny;
+      h.seen = true;
+      const span = Math.hypot(wrist.x - mcp.x, wrist.y - mcp.y) || 1e-3;
+      const ratio = Math.hypot(thumb.x - tip.x, thumb.y - tip.y) / span;
+      h.pinch = h.pinch ? ratio < 1.0 : ratio < 0.7;   // hysteresis
+    }
+    const p0 = H[0].seen && H[0].pinch, p1 = H[1].seen && H[1].pinch;
+
+    // Two hands pinched → strain the selected object by their spread.
+    if (p0 && p1 && selected) {
+      grab = null;
+      const dx = Math.abs(H[0].x - H[1].x), dy = Math.abs(H[0].y - H[1].y), dist = Math.hypot(dx, dy);
+      if (!two) two = { dx: dx || 1e-3, dy: dy || 1e-3, dist: dist || 1e-3, scale: selected.scale.clone() };
+      else if (stretchMode) {
+        selected.scale.x = clamp(two.scale.x * (dx / two.dx), 0.1, 8);
+        selected.scale.y = clamp(two.scale.y * (dy / two.dy), 0.1, 8);
+      } else {
+        selected.scale.copy(two.scale).multiplyScalar(clamp(dist / two.dist, 0.1, 8)).clampScalar(0.1, 8);
+      }
+      return;
+    }
+    two = null;
+
+    // One hand pinched → select+grab, then drag or strain.
+    if (p0) {
+      if (!grab) {                                     // pinch just started → pick under fingertip
+        const entity = pickAt(H[0].x, H[0].y);
+        if (entity) { select(entity); grab = entity; grabStartScale.copy(entity.scale); grabStart = { x: H[0].x, y: H[0].y }; }
+      } else if (stretchMode) {
+        strainSelected(H[0].x - grabStart.x, H[0].y - grabStart.y, grabStartScale);
+      } else {
+        moveEntityToNdc(grab, H[0].x, H[0].y);
+      }
+    } else {
+      grab = null;
+    }
   }
 
   window.addEventListener("resize", () => {
@@ -156,8 +287,8 @@ export async function createStudio(host) {
     renderer.setSize(host.clientWidth, host.clientHeight);
   });
 
-  (function animate() { requestAnimationFrame(animate); objects.forEach(o => o.rotation.y += 0.002); renderer.render(scene, camera); })();
+  (function animate() { requestAnimationFrame(animate); renderer.render(scene, camera); })();
 
   spawn("box");
-  return { spawn, clone, remove, toggleGestures };
+  return { spawn, clone, remove, toggleGestures, toggleStretch, beginAttach, submitAttach, mergeSelected, exportGLB };
 }

@@ -103,6 +103,16 @@ mood, and animation/motion) that steers the generated or edited program — so y
 can send a mockup and say "build this" or "make it match this design". (Vision
 quality depends on the active model; without vision the image is still embedded.)
 
+**3D studio — model, attach, merge, export.** Spawn shapes and drag to move; toggle
+**↔ Stretch** to strain objects per-axis (drag = X/Y, pinch/wheel = Z) for detailed
+modeling. **🔗 Attach** → tap objects you've dragged together → **✅ Submit** binds
+them into a group; **🧊 Mesh** merges the group into one solid. **⬇ Export** downloads
+the whole project as a **`.glb`** file. **✋ Gestures** enables camera hand control
+(720p60 + GPU + frame-synced tracking, two-hand, smoothed): pinch over an object to
+select and drag it, and — with Stretch on — pinch-drag (or two-hand spread) to strain
+it. Games built with Vibe Build are generated as **actually playable** games (real
+game loop, keyboard + touch controls, scoring, win/lose + restart), not screen mockups.
+
 **Quality pipeline (no extra cost, same model).** Higher output quality comes from
 *inference-time* technique, not from changing the model or paying: Vibe Build can
 **plan → generate best-of-N candidates → actually run each in a sandbox →
