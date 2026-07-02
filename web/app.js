@@ -32,6 +32,8 @@ const store = {
   set buildModel(v) { localStorage.setItem("actig.buildModel", (v || "").trim()); },
   get ghToken() { return (localStorage.getItem("actig.ghToken") || "").trim(); },
   set ghToken(v) { localStorage.setItem("actig.ghToken", (v || "").trim()); },
+  get quality() { return (localStorage.getItem("actig.quality") || "max").trim(); },  // fast|high|max
+  set quality(v) { localStorage.setItem("actig.quality", (v || "max").trim()); },
   get history() { try { return JSON.parse(localStorage.getItem("actig.history") || "[]"); } catch { return []; } },
   set history(v) { localStorage.setItem("actig.history", JSON.stringify(v.slice(-400))); },
 };
@@ -753,6 +755,7 @@ async function ensureBuild() {
     llmGenerate, store, addBubble,
     dom: {
       iframe: $("buildPreview"), fileList: $("buildFiles"), statusEl: $("buildStatus"),
+      metricsEl: $("buildMetrics"),
       openBtn: $("buildOpen"), zipBtn: $("buildZip"), publishBtn: $("buildPublish"),
     },
   });
@@ -784,16 +787,17 @@ async function runBuild(spec, source, lang, atts) {
 /* Announce completion three ways: a chat bubble with the link, spoken TTS, and a
    Web Notification. Auto-publishes a public URL if a GitHub token is configured. */
 function notifyBuildDone(res, source) {
+  const score = res.metrics ? ` (quality ${res.metrics.score}/100)` : "";
   setStatus("Build finished ✓");
-  const b = addBubble("ai", "✅ Build finished — your program is ready to test.");
+  const b = addBubble("ai", `✅ Build finished${score} — your program is ready to test.`);
   const wrap = document.createElement("div"); wrap.className = "chips";
   const open = document.createElement("span"); open.className = "opt"; open.textContent = "▶ Open program";
   open.onclick = () => window.open(res.previewUrl, "_blank"); wrap.appendChild(open);
   const zip = document.createElement("span"); zip.className = "opt"; zip.textContent = "⬇ Download ZIP";
   zip.onclick = () => builder?.downloadZip(); wrap.appendChild(zip);
   b.appendChild(wrap);
-  speak("Your program is ready, sir. The build is finished.", "en-US");
-  webNotify("ACTIG — build finished", "Your program is ready to test.", res.previewUrl);
+  speak(`Your program is ready, sir. The build is finished${res.metrics ? `, quality score ${res.metrics.score} out of 100` : ""}.`, "en-US");
+  webNotify("ACTIG — build finished", "Your program is ready to test." + score, res.previewUrl);
   if (store.ghToken && builder) {
     $("buildStatus").textContent = "Publishing public link…";
     builder.publish()
@@ -820,12 +824,14 @@ function boot() {
   $("apiKey").value = store.key; $("preferOffline").checked = store.offline;
   $("model").value = store.model; $("endpoint").value = store.endpoint;
   $("buildModel").value = store.buildModel; $("ghToken").value = store.ghToken;
+  $("buildQuality").value = store.quality;
   $("saveKey").onclick = () => {
     store.key = $("apiKey").value;
     store.model = $("model").value;
     store.endpoint = $("endpoint").value;
     store.buildModel = $("buildModel").value;
     store.ghToken = $("ghToken").value;
+    store.quality = $("buildQuality").value;
     store.offline = $("preferOffline").checked;
     $("model").value = store.model; $("endpoint").value = store.endpoint; // reflect defaults
     setStatus("Saved");

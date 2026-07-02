@@ -52,6 +52,7 @@
           <button id="buildPublish" class="chip" disabled>🌐 Publish</button>
         </div>
         <div id="buildStatus" class="muted"></div>
+        <div id="buildMetrics" class="build-metrics" style="display:none"></div>
         <div id="buildFiles" class="build-files"></div>
         <iframe id="buildPreview" class="build-preview" title="Program preview"
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-pointer-lock"></iframe>
@@ -79,6 +80,13 @@
         <p class="muted">Describe a program in chat/voice or the Build tab and ACTIG
         writes it, previews it live, and gives you a testable link + ZIP. Uses the
         brain above (NVIDIA if configured, else the free one).</p>
+        <label>Build quality (higher = more automatic passes; same free model, slower, still $0)
+          <select id="buildQuality">
+            <option value="max">Max — best-of-N + self-test + multi-pass auto-repair (highest quality)</option>
+            <option value="high">High — generate + critique + one auto-repair</option>
+            <option value="fast">Fast — single pass (quickest)</option>
+          </select>
+        </label>
         <label>Build model (optional — overrides the model above for code)
           <input id="buildModel" type="text" placeholder="(use default)" autocomplete="off" />
         </label>

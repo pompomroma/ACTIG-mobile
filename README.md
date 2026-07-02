@@ -80,7 +80,17 @@ ACTIG generates a complete, self-contained client-side web program, runs it in a
 live in-browser preview, and gives you an **Open** link + a **ZIP** of the source
 (3D emitted as text glTF/OBJ). It auto-announces "build finished" via chat, voice,
 and a notification. It uses the configured brain — NVIDIA Nemotron if you set a
-key + the proxy (`web/proxy/`), otherwise the free brain. Add a GitHub token in
+key + the proxy (`web/proxy/`), otherwise the free brain.
+
+**Quality pipeline (no extra cost, same model).** Higher output quality comes from
+*inference-time* technique, not from changing the model or paying: Vibe Build can
+**plan → generate best-of-N candidates → actually run each in a sandbox →
+self-critique and auto-repair** the code until a live **Evaluation scorecard**
+(parses, 0 runtime/console errors, renders UI, checklist coverage) stops improving.
+Pick **Fast / High / Max** in Settings (default **Max**); higher tiers just make
+more calls to the *same free endpoint* (slower, still $0). Note: a model's benchmark
+scores and a chip's TOPS are fixed and cannot be changed by the app — this raises
+the *measured quality of the generated result*, which is what the scorecard shows. Add a GitHub token in
 Settings to also **Publish** a public shareable URL (via Gist + gist.githack).
 Note: a static web app can run front-end code from a link but not a real server —
 backend needs are approximated in-browser. For a permanent `github.io` URL, the owner can enable
