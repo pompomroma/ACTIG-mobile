@@ -41,10 +41,11 @@ ${OUTPUT_FORMAT}
 Keep what works, fix what doesn't, fully implement anything missing. Do not add explanations.`;
 
 // Quality tiers: how many candidates to generate and how hard to repair.
+// (All use the SAME free model — higher tiers just do more inference-time passes.)
 const TIERS = {
-  fast: { candidates: 1, plan: false, repairs: 0 },
-  high: { candidates: 1, plan: true, repairs: 1 },
-  max: { candidates: 2, plan: true, repairs: 3 },
+  fast: { candidates: 1, plan: false, repairs: 0, tokens: 8000 },
+  high: { candidates: 1, plan: true, repairs: 1, tokens: 9000 },
+  max: { candidates: 3, plan: true, repairs: 4, tokens: 12000 },   // pushed to the practical ceiling
 };
 
 // Common words ignored when heuristically matching checklist items to code.
@@ -91,7 +92,7 @@ export function createBuilder(deps) {
       try {
         raw = await deps.llmGenerate(SYSTEM, user, {
           onToken: (_d, full) => onStatus?.(`Generating… ${full.length.toLocaleString()} chars`),
-          maxTokens: 8000, temperature: c === 0 ? 0.2 : 0.5,
+          maxTokens: tier.tokens || 8000, temperature: c === 0 ? 0.2 : 0.5,
         });
       } catch (e) { if (!best) throw e; else continue; }
       const files = parseFiles(raw);
@@ -163,9 +164,9 @@ export function createBuilder(deps) {
     if (failed.length) defects.push("Failed checks: " + failed.join("; "));
     if (checklist.length) defects.push("Acceptance checklist:\n- " + checklist.join("\n- "));
     const user = `Current program:\n${filesBlock}\n\n${defects.join("\n\n") || "Improve overall quality, robustness and completeness."}\n\nReturn the COMPLETE corrected project.`;
+    const tier = TIERS[deps.store.quality] || TIERS.max;
     return deps.llmGenerate(REVIEWER, user, {
-      onToken: (_d, full) => {},
-      maxTokens: 8000, temperature: 0.2,
+      maxTokens: tier.tokens || 8000, temperature: 0.2,
     });
   }
 
@@ -250,19 +251,24 @@ export function createBuilder(deps) {
     const errors = (run.errors || []).filter(Boolean);
     const metrics = [];
     const add = (label, pass, weight) => metrics.push({ label, pass: !!pass, weight });
-    add("Parses & has entry point", !!files["index.html"], 20);
-    add("Runs with 0 console/runtime errors", !run.timeout && errors.length === 0, 30);
-    add("Renders visible UI", run.kids > 0, 15);
-    add("No TODO/placeholder text", !/\b(todo|fixme|lorem ipsum|your code here|implement this|coming soon)\b/i.test(html), 10);
+    // Accessibility: every <img> should carry an alt attribute.
+    const imgTags = html.match(/<img\b[^>]*>/gi) || [];
+    const imgsHaveAlt = imgTags.every(t => /\balt\s*=/.test(t));
+    add("Parses & has entry point", !!files["index.html"], 18);
+    add("Runs with 0 console/runtime errors", !run.timeout && errors.length === 0, 26);
+    add("Renders visible UI", run.kids > 0, 14);
+    add("No TODO/placeholder text", !/\b(todo|fixme|lorem ipsum|your code here|implement this|coming soon)\b/i.test(html), 8);
+    add("Mobile-ready (viewport meta)", /<meta[^>]+name=["']?viewport/i.test(html), 6);
+    add("Accessibility basics (lang + img alt)", /<html[^>]+lang=/i.test(html) && imgsHaveAlt, 8);
     if (checklist.length) {
       let covered = 0;
       for (const item of checklist) {
         const strong = (item.toLowerCase().match(/[a-z][a-z0-9+.#-]{2,}/g) || []).filter(w => !STOP.has(w));
         if (!strong.length || strong.some(w => combined.includes(w))) covered++;
       }
-      add(`Checklist coverage (${covered}/${checklist.length})`, covered >= Math.ceil(checklist.length * 0.7), 20);
+      add(`Checklist coverage (${covered}/${checklist.length})`, covered >= Math.ceil(checklist.length * 0.7), 15);
     } else {
-      add("Substantial implementation", html.length > 1200, 20);
+      add("Substantial implementation", html.length > 1200, 15);
     }
     add("Reasonable size", html.length > 400, 5);
     const totW = metrics.reduce((s, m) => s + m.weight, 0) || 1;

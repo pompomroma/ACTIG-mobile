@@ -87,8 +87,10 @@ key + the proxy (`web/proxy/`), otherwise the free brain.
 **plan → generate best-of-N candidates → actually run each in a sandbox →
 self-critique and auto-repair** the code until a live **Evaluation scorecard**
 (parses, 0 runtime/console errors, renders UI, checklist coverage) stops improving.
-Pick **Fast / High / Max** in Settings (default **Max**); higher tiers just make
-more calls to the *same free endpoint* (slower, still $0). Note: a model's benchmark
+Pick **Fast / High / Max** in Settings (default **Max** = best-of-3 candidates,
+up to 4 auto-repair passes, larger token budget, and extra eval checks for mobile
++ accessibility); higher tiers just make more calls to the *same free endpoint*
+(slower, still $0). Note: a model's benchmark
 scores and a chip's TOPS are fixed and cannot be changed by the app — this raises
 the *measured quality of the generated result*, which is what the scorecard shows. Add a GitHub token in
 Settings to also **Publish** a public shareable URL (via Gist + gist.githack).
