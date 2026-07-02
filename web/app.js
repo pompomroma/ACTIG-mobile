@@ -530,6 +530,22 @@ async function callLLMVision(history, images, lang, onToken) {
   return openaiPostRaw(endpoint, messages, { onToken, key: keyless ? "" : key, model: store.model, maxTokens: 1024, temperature: 0.5 });
 }
 
+/* Vision analysis: describe attached image(s) for a developer to reproduce
+   (colors, typography, layout, components, mood, and animation/motion). Used by
+   Vibe Build so generation/edits actually match a sent design. Throws if the
+   endpoint/model can't do vision — callers degrade to embedding the image. */
+async function visionDescribe(images, instruction) {
+  const endpoint = store.endpoint;
+  const keyless = KEYLESS.test(endpoint);
+  const content = [{ type: "text", text: instruction }];
+  for (const im of images.slice(0, 4)) content.push({ type: "image_url", image_url: { url: im.dataUrl } });
+  const messages = [
+    { role: "system", content: "You are a senior UI/UX and motion designer. Analyze the given image(s) precisely and concretely so a developer can reproduce them in a web app." },
+    { role: "user", content },
+  ];
+  return openaiPostRaw(endpoint, messages, { key: keyless ? "" : store.key, model: store.buildModel || store.model, maxTokens: 900, temperature: 0.2 });
+}
+
 /* Generic single-shot generation with an arbitrary system+user prompt — used by
    the code generator (Vibe Build). Auto-picks the provider like chat does: keyless
    default (Pollinations) tries the no-preflight GET first for large outputs and
@@ -643,8 +659,8 @@ async function submit(text, source, atts) {
 
   // Adjust the loaded program — when a saved/loaded program is active and the
   // message reads like an edit instruction, apply it instead of chatting.
-  if (buildEditMode && /\b(add|change|make it|make the|remove|delete|adjust|edit|update|modify|set (the|it)|rename|replace|turn .* into|fix|increase|decrease|resize|recolor|restyle|move|swap|instead|also add|also make)\b/i.test(low)) {
-    runAdjust(text, source);
+  if (buildEditMode && (atts.length || /\b(add|change|make it|make the|remove|delete|adjust|edit|update|modify|set (the|it)|rename|replace|turn .* into|fix|increase|decrease|resize|recolor|restyle|move|swap|instead|also add|also make|match|like this|this design|this style)\b/i.test(low))) {
+    runAdjust(text || "Apply the attached reference(s) to the current program.", source, atts);
     return;
   }
 
@@ -763,7 +779,7 @@ async function ensureBuild() {
   if (builder) return builder;
   const mod = await import("./build.js");
   builder = mod.createBuilder({
-    llmGenerate, store, addBubble,
+    llmGenerate, visionDescribe, store, addBubble,
     dom: {
       iframe: $("buildPreview"), fileList: $("buildFiles"), statusEl: $("buildStatus"),
       metricsEl: $("buildMetrics"), libraryEl: $("buildLibrary"),
@@ -802,8 +818,9 @@ function clearBuildEditMode() {
 }
 
 /* Apply a requested change to the loaded program via the AI editor. */
-async function runAdjust(request, source) {
+async function runAdjust(request, source, atts) {
   if (building) { addBubble("sys", "Busy — one build/edit at a time."); return; }
+  atts = atts || [];
   building = true; acquireWakeLock();
   switchTab("build");
   const b = await ensureBuild().catch(() => null);
@@ -812,7 +829,7 @@ async function runAdjust(request, source) {
   if (source === "voice") speak("Applying your change, sir.", "en-US");
   setStatus("Editing…"); $("buildStatus").textContent = "Editing…";
   try {
-    const res = await b.applyAdjustment(request, { onStatus: (s) => { setStatus(s); $("buildStatus").textContent = s; } });
+    const res = await b.applyAdjustment(request, { atts, onStatus: (s) => { setStatus(s); $("buildStatus").textContent = s; } });
     notifyBuildDone(res, source, b.isSaved() ? " (saved changes)" : "");
   } catch (e) {
     setStatus("Edit failed"); $("buildStatus").textContent = "Edit failed: " + shortErr(e);
@@ -937,7 +954,7 @@ function boot() {
   $("gesture").onclick = (e) => { ensureStudio().then(() => { const on = studio?.toggleGestures(); e.target.classList.toggle("on", on); }); };
   // Vibe Build
   $("buildGo").onclick = () => { const v = $("buildSpec").value.trim(); if (v) { clearBuildEditMode(); runBuild(v, "text", "en-US"); } };
-  $("buildApply").onclick = () => { const v = $("buildSpec").value.trim(); if (!v) { addBubble("sys", "Type the change to apply first."); return; } $("buildSpec").value = ""; runAdjust(v, "text"); };
+  $("buildApply").onclick = () => { const v = $("buildSpec").value.trim(); const a = takeAttachments(); if (!v && !a.length) { addBubble("sys", "Type the change (and/or attach a reference) first."); return; } $("buildSpec").value = ""; runAdjust(v || "Apply the attached reference(s) to the current program.", "text", a); };
   $("buildNew").onclick = () => { clearBuildEditMode(); setStatus("Ready for a new build"); };
   $("buildSave").onclick = async () => {
     const b = await ensureBuild().catch(() => null);

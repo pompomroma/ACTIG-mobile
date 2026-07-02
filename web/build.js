@@ -34,6 +34,8 @@ HARD RULES:
 
 Build EXACTLY what the user asks — complete, correct, optimized, and genuinely high quality.`;
 
+const DESIGN_PROMPT = `Analyze the attached image(s) so a developer can faithfully reproduce them in a web app. Be concrete and structured. Cover: color palette (list hex values), typography (font families/weights/sizes/hierarchy), layout & spacing (grid, alignment, sizing), key components/controls, iconography & imagery style, overall theme/mood (light or dark), and any ANIMATION/motion shown or implied (transitions, easing, duration, hover/scroll effects, loops). If it's a UI mockup, describe each screen region. Output a concise design brief — no code.`;
+
 const EDITOR = `You are editing an EXISTING browser-only web app. Apply the user's requested change(s) to the given files. Preserve everything that already works; change only what the request needs. Keep it a complete, self-contained, runnable program: index.html entry point, libraries via CDN <script> tags, NO ES module imports between your own files. Return the COMPLETE updated project (every file in full).
 
 ${OUTPUT_FORMAT}
@@ -120,7 +122,7 @@ export function createBuilder(deps) {
     revokeLast();
     currentId = null; currentName = ""; currentCreatedAt = null; lastSpec = spec; // a fresh build is a new, unsaved program
     const tier = TIERS[deps.store.quality] || TIERS.max;
-    const ref = resume ? (resume.ref || "") : attachmentContext(atts);
+    const ref = resume ? (resume.ref || "") : await analyzeContext(atts, onStatus);
     let checklist = resume ? (resume.checklist || []) : [];
     let best = resume ? (resume.best || null) : null;
     let candStart = resume ? (resume.candidatesDone || 0) : 0;
@@ -203,6 +205,22 @@ export function createBuilder(deps) {
     }
     const bigImgs = atts.filter(a => a.kind === "image" && (!a.dataUrl || a.dataUrl.length >= 60000));
     if (bigImgs.length) ref += `\n\nThe user also attached large image(s): ${bigImgs.map(a => a.name).join(", ")} (too big to inline — reference by name / use a placeholder).`;
+    return ref;
+  }
+
+  /* Like attachmentContext, but also VISION-ANALYZES attached images into a design
+     brief (colors, layout, animation…) the model can implement. Falls back to plain
+     embedding if the endpoint/model can't do vision. */
+  async function analyzeContext(atts, onStatus) {
+    let ref = attachmentContext(atts);
+    const imgs = atts.filter(a => a.kind === "image" && a.dataUrl);
+    if (imgs.length && deps.visionDescribe) {
+      onStatus?.("Analyzing attached image(s)…");
+      try {
+        const brief = await deps.visionDescribe(imgs, DESIGN_PROMPT);
+        if (brief && brief.trim()) ref += `\n\nDESIGN ANALYSIS of the attached image(s) — match this look, layout, and motion in the program:\n${brief.trim()}`;
+      } catch { /* no vision available — the embedded image (if small) still helps */ }
+    }
     return ref;
   }
 
@@ -421,11 +439,12 @@ export function createBuilder(deps) {
   }
 
   /* ---- AI edit: apply a requested change to the loaded program ---- */
-  async function applyAdjustment(request, { onStatus } = {}) {
+  async function applyAdjustment(request, { onStatus, atts = [] } = {}) {
     if (!last) throw new Error("open or generate a program first, then request a change");
     const tier = TIERS[deps.store.quality] || TIERS.max;
+    const ctx = atts.length ? await analyzeContext(atts, onStatus) : "";
     const filesBlock = Object.entries(last.files).map(([p, c]) => `===FILE: ${p}===\n${c}`).join("\n");
-    const user = `Current program:\n${filesBlock}\n\nRequested change:\n${request}\n\nReturn the COMPLETE updated project.`;
+    const user = `Current program:\n${filesBlock}\n\nRequested change:\n${request}${ctx ? `\n\nAttached references to use:${ctx}` : ""}\n\nReturn the COMPLETE updated project.`;
     onStatus?.("Applying change…");
     const raw = await deps.llmGenerate(EDITOR, user, {
       onToken: (_d, full) => onStatus?.(`Editing… ${full.length.toLocaleString()} chars`),

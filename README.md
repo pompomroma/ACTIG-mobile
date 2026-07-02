@@ -96,6 +96,13 @@ loaded program, re-tests it, updates the preview, and re-saves it. **＋ New**
 starts a fresh build. (The library is local to the device; each program is also
 downloadable as a ZIP or publishable to a URL for real backup.)
 
+**Attachment analysis.** Attach files (📎) to a build or an adjustment and ACTIG
+uses them: text/code/data files are read and used directly, and **images are
+vision-analyzed into a design brief** (palette, typography, layout, components,
+mood, and animation/motion) that steers the generated or edited program — so you
+can send a mockup and say "build this" or "make it match this design". (Vision
+quality depends on the active model; without vision the image is still embedded.)
+
 **Quality pipeline (no extra cost, same model).** Higher output quality comes from
 *inference-time* technique, not from changing the model or paying: Vibe Build can
 **plan → generate best-of-N candidates → actually run each in a sandbox →
