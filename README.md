@@ -69,7 +69,8 @@ Add to Home Screen** —
 (served straight from the repo by a free CDN; the long code is a commit hash, used
 because the working branch name contains slashes that CDNs can't parse). No PC, no Apple account, no
 signing, no key. The AI answers immediately via a free, browser-friendly brain.
-Covers chat, voice in/out, wake word, language switch, the 3D studio,
+Covers chat, voice in/out, wake word, language switch, **file attachments**
+(📎 — attach code/data/text files or images to a request), the 3D studio,
 history, and **Vibe Build** (see below); native-only features (Siri, widgets,
 HealthKit, Apple's on-device model) need the native app.
 

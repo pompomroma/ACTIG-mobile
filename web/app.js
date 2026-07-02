@@ -50,6 +50,52 @@ const store = {
 
 let messages = store.history;        // {role, text, options?, suggestions?}
 let aiMuted = false, userMuted = false, speaking = false;
+let attachments = [];                 // files staged in the input bar: {name,type,size,kind,text?,dataUrl?}
+
+/* ---------- file attachments ---------- */
+const TEXT_EXT = /\.(txt|md|markdown|csv|tsv|json|jsonl|ya?ml|xml|html?|css|s[ac]ss|jsx?|mjs|cjs|tsx?|py|rb|go|rs|java|kt|swift|c|h|cpp|cc|hpp|cs|php|sh|bash|zsh|sql|toml|ini|env|gltf|obj|mtl|svg|log|vue|astro|dart|lua|r|jl)$/i;
+function classifyFile(f) {
+  if (TEXT_EXT.test(f.name)) return "text";                 // .svg etc. are text even if MIME says image
+  if ((f.type || "").startsWith("image/")) return "image";
+  if ((f.type || "").startsWith("text/") || (f.type || "").includes("json") || (f.type || "").includes("xml")) return "text";
+  return "binary";
+}
+const readDataUrl = (f) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
+
+async function addFiles(fileList) {
+  for (const f of Array.from(fileList || [])) {
+    const kind = classifyFile(f);
+    const att = { name: f.name, type: f.type || "", size: f.size, kind };
+    try {
+      if (kind === "text") att.text = (await f.text()).slice(0, 30000);     // cap per-file text
+      else if (kind === "image") att.dataUrl = await readDataUrl(f);
+      else att.dataUrl = await readDataUrl(f);                              // keep binary for the ZIP/build
+    } catch {}
+    attachments.push(att);
+  }
+  renderAttachments();
+}
+function takeAttachments() { const a = attachments.slice(); attachments = []; renderAttachments(); return a; }
+function renderAttachments() {
+  const bar = $("attachBar"); if (!bar) return;
+  bar.innerHTML = "";
+  bar.style.display = attachments.length ? "flex" : "none";
+  attachments.forEach((a, i) => {
+    const chip = document.createElement("span"); chip.className = "att";
+    chip.textContent = (a.kind === "image" ? "🖼 " : "📄 ") + a.name;
+    const x = document.createElement("button"); x.className = "att-x"; x.textContent = "×";
+    x.onclick = () => { attachments.splice(i, 1); renderAttachments(); };
+    chip.appendChild(x); bar.appendChild(chip);
+  });
+}
+/* Inline attached text-file contents into the message the model sees. */
+function augmentWithFiles(text, atts) {
+  const texts = (atts || []).filter(a => a.kind === "text" && a.text);
+  if (!texts.length) return text || "";
+  let out = (text || "Here are the attached files.") + "\n\n--- Attached files ---";
+  for (const a of texts) out += `\n\n===FILE: ${a.name}===\n${a.text}`;
+  return out;
+}
 
 /* ---------- language ---------- */
 function detectLang(t) {
@@ -457,6 +503,28 @@ async function openaiPost(endpoint, history, lang, onToken, key) {
   return openaiPostRaw(endpoint, messages, { onToken, key, model: store.model, maxTokens: 512, temperature: 0.6 });
 }
 
+/* Vision chat: send the latest user turn as a multimodal message (text + images)
+   via a POST. Works when the endpoint/model supports vision (e.g. Pollinations
+   "openai"); the caller falls back to text-only if this throws. */
+async function callLLMVision(history, images, lang, onToken) {
+  const endpoint = store.endpoint;
+  const keyless = KEYLESS.test(endpoint);
+  const key = store.key;
+  const src = history.filter(m => m.role !== "sys");
+  const messages = [{ role: "system", content: systemPrompt(lang) }];
+  src.forEach((m, i) => {
+    const isLastUser = i === src.length - 1 && m.role === "user";
+    if (isLastUser) {
+      const content = [{ type: "text", text: m.text }];
+      for (const im of images) content.push({ type: "image_url", image_url: { url: im.dataUrl } });
+      messages.push({ role: "user", content });
+    } else {
+      messages.push({ role: m.role === "assistant" ? "assistant" : "user", content: m.text });
+    }
+  });
+  return openaiPostRaw(endpoint, messages, { onToken, key: keyless ? "" : key, model: store.model, maxTokens: 1024, temperature: 0.5 });
+}
+
 /* Generic single-shot generation with an arbitrary system+user prompt — used by
    the code generator (Vibe Build). Auto-picks the provider like chat does: keyless
    default (Pollinations) tries the no-preflight GET first for large outputs and
@@ -539,12 +607,14 @@ function parseStructured(raw) {
 }
 
 /* ---------- command routing ---------- */
-async function submit(text, source) {
-  const lang = detectLang(text);
-  addBubble("user", text);
-  messages.push({ role: "user", text }); persist();
+async function submit(text, source, atts) {
+  atts = atts || takeAttachments();               // files attached in the input bar
+  const lang = detectLang(text || (atts.length ? "the attached files" : ""));
+  const modelText = augmentWithFiles(text, atts); // text-file contents inlined for the model
+  addBubble("user", text || "(attached files)", [], [], atts);
+  messages.push({ role: "user", text: modelText, display: text, attNames: atts.map(a => a.name) }); persist();
 
-  const low = text.toLowerCase();
+  const low = (text || "").toLowerCase();
   // deterministic intents (work offline, no key needed)
   if (/(3d|three d).*(project|space|studio)|open studio|3d 프로젝트|3dプロジェクト/.test(low)) {
     switchTab("studio"); return finish("Opening the 3D project space.", lang, source);
@@ -561,7 +631,7 @@ async function submit(text, source) {
   if (/\b(build|make|create|generate|develop|code)\b[\s\S]*\b(app|application|web ?app|web ?site|website|web ?page|page|site|game|program|tool|dashboard|landing|clone|3d|three ?d|model|viewer|simulation|visuali[sz]er)\b/.test(low)
       || /^\s*vibe ?code\b/.test(low)) {
     const spec = text.replace(/^\s*(please\s+)?(vibe ?code|build|make|create|generate|develop|code)\s+(me\s+)?(a|an|the)?\s*/i, "").trim() || text;
-    runBuild(spec, source, lang);
+    runBuild(spec, source, lang, atts);
     return;
   }
 
@@ -571,7 +641,7 @@ async function submit(text, source) {
   const bubble = addBubble("ai", "");
   if (source === "voice" && "speechSynthesis" in window) speechSynthesis.cancel();
   let spoken = 0, firstToken = true;
-  const raw = await callLLM(messages, lang, (_delta, full) => {
+  const onToken = (_delta, full) => {
     if (firstToken) { firstToken = false; setStatus("Replying…"); }
     const shown = parseStructured(full).text;      // hide <<OPTIONS>>/<<SUGGESTIONS>> markers
     setBubbleText(bubble, shown);
@@ -580,7 +650,15 @@ async function submit(text, source) {
       const end = lastSentenceEnd(pending);
       if (end > 0) { speakQueued(pending.slice(0, end), lang); spoken += end; }
     }
-  });
+  };
+  const images = atts.filter(a => a.kind === "image" && a.dataUrl);
+  let raw;
+  if (images.length) {                              // vision: send image(s) via a multimodal POST
+    try { raw = await callLLMVision(messages, images, lang, onToken); }
+    catch { raw = await callLLM(messages, lang, onToken); } // provider has no vision/CORS → text only
+  } else {
+    raw = await callLLM(messages, lang, onToken);
+  }
   const { text: reply, options, suggestions } = parseStructured(raw);
   setBubbleText(bubble, reply);
   decorateBubble(bubble, options, suggestions);
@@ -599,13 +677,24 @@ function finish(reply, lang, source) {
 }
 
 /* ---------- UI ---------- */
-function addBubble(kind, text, options = [], suggestions = []) {
+function addBubble(kind, text, options = [], suggestions = [], atts = []) {
   const t = $("transcript");
   const b = document.createElement("div");
   b.className = "bubble " + (kind === "user" ? "user" : kind === "sys" ? "sys" : "ai");
   const txt = document.createElement("span");
   txt.className = "txt"; txt.textContent = text;
   b.appendChild(txt);
+  if (atts && atts.length) {                       // show attached-file badges on the bubble
+    const files = document.createElement("div"); files.className = "att-list";
+    atts.forEach(a => {
+      const name = typeof a === "string" ? a : a.name;
+      const isImg = typeof a !== "string" && a.kind === "image";
+      const f = document.createElement("span"); f.className = "att-badge";
+      f.textContent = (isImg ? "🖼 " : "📄 ") + name;
+      files.appendChild(f);
+    });
+    b.appendChild(files);
+  }
   decorateBubble(b, options, suggestions);
   t.appendChild(b); t.scrollTop = t.scrollHeight;
   return b;
@@ -671,7 +760,8 @@ async function ensureBuild() {
 }
 
 /* Generate a program from a spec, then auto-deliver the testable link(s). */
-async function runBuild(spec, source, lang) {
+async function runBuild(spec, source, lang, atts) {
+  atts = atts || takeAttachments();
   switchTab("build");
   try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); } catch {}
   const b = await ensureBuild().catch(() => null);
@@ -681,7 +771,7 @@ async function runBuild(spec, source, lang) {
   setStatus("Building…");
   $("buildStatus").textContent = "Building…";
   try {
-    const res = await b.generate(spec, { onStatus: (s) => { setStatus(s); $("buildStatus").textContent = s; } });
+    const res = await b.generate(spec, { atts, onStatus: (s) => { setStatus(s); $("buildStatus").textContent = s; } });
     notifyBuildDone(res, source);
   } catch (e) {
     setStatus("Build failed");
@@ -724,8 +814,8 @@ function webNotify(title, body, url) {
 
 /* ---------- wiring ---------- */
 function boot() {
-  // restore transcript
-  messages.forEach(m => addBubble(m.role === "user" ? "user" : "ai", m.text, m.options, m.suggestions));
+  // restore transcript (show the clean display text + attachment badges)
+  messages.forEach(m => addBubble(m.role === "user" ? "user" : "ai", m.display || m.text, m.options, m.suggestions, m.attNames || []));
   // settings
   $("apiKey").value = store.key; $("preferOffline").checked = store.offline;
   $("model").value = store.model; $("endpoint").value = store.endpoint;
@@ -743,7 +833,10 @@ function boot() {
   $("clearHistory").onclick = () => { messages = []; persist(); $("transcript").innerHTML = ""; };
   // input
   $("send").onclick = send; $("draft").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
-  function send() { const v = $("draft").value.trim(); if (!v) return; $("draft").value = ""; submit(v, "text"); }
+  function send() { const v = $("draft").value.trim(); if (!v && !attachments.length) return; $("draft").value = ""; submit(v, "text"); }
+  // file attachments
+  $("attach").onclick = () => $("fileInput").click();
+  $("fileInput").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
   // HUD
   $("emergency").onclick = wake;
   $("micUser").onclick = toggleMic;            // one tap turns the mic on/off

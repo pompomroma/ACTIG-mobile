@@ -32,10 +32,23 @@ export function createBuilder(deps) {
   let last = null;               // { files, previewUrl, blobUrls }
 
   /* ---- generation ---- */
-  async function generate(spec, { onStatus } = {}) {
+  async function generate(spec, { onStatus, atts = [] } = {}) {
     revokeLast();
     onStatus?.("Designing…");
-    const user = `Build this program:\n${spec}\n\nRemember: index.html entry point, self-contained, runs in the browser.`;
+    let ref = "";
+    const texts = atts.filter(a => a.kind === "text" && a.text);
+    if (texts.length) {
+      ref += "\n\nReference files the user attached — use them as appropriate:";
+      for (const a of texts) ref += `\n===FILE: ${a.name}===\n${a.text}`;
+    }
+    const smallImgs = atts.filter(a => a.kind === "image" && a.dataUrl && a.dataUrl.length < 60000);
+    if (smallImgs.length) {
+      ref += "\n\nUser-provided images — embed these EXACT data URIs where appropriate (e.g. <img src=…>):";
+      for (const a of smallImgs) ref += `\n${a.name}: ${a.dataUrl}`;
+    }
+    const bigImgs = atts.filter(a => a.kind === "image" && (!a.dataUrl || a.dataUrl.length >= 60000));
+    if (bigImgs.length) ref += `\n\nThe user also attached large image(s): ${bigImgs.map(a => a.name).join(", ")} (too big to inline — reference by name / use a placeholder).`;
+    const user = `Build this program:\n${spec}${ref}\n\nRemember: index.html entry point, self-contained, runs in the browser.`;
     let raw = "";
     raw = await deps.llmGenerate(SYSTEM, user, {
       onToken: (_d, full) => { onStatus?.(`Generating… ${full.length.toLocaleString()} chars`); },

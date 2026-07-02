@@ -66,6 +66,14 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
   animation:pulse 1s ease-in-out infinite}
 @keyframes pulse{0%,100%{box-shadow:0 0 10px rgba(69,199,255,.5)}50%{box-shadow:0 0 22px rgba(69,199,255,.95)}}
 
+.attachbar{display:flex;flex-wrap:wrap;gap:6px;padding:6px 12px 0}
+.attachbar .att{display:inline-flex;align-items:center;gap:6px;font-size:12px;
+  padding:4px 8px;border-radius:16px;background:var(--panel);border:1px solid var(--line);color:var(--text)}
+.attachbar .att-x{background:transparent;border:0;color:var(--danger);font-size:15px;line-height:1;padding:0}
+.att-list{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.att-badge{font-size:11px;padding:2px 7px;border-radius:12px;background:rgba(0,0,0,.25);
+  border:1px solid var(--line);opacity:.9}
+
 .inputbar{display:flex;gap:8px;padding:8px 12px;border-top:1px solid var(--line)}
 .inputbar input{flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);
   background:rgba(0,0,0,.3);color:var(--text)}
