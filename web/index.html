@@ -47,12 +47,16 @@
           placeholder="Describe a program to build… e.g. “a neon snake game”, “a markdown notes app”, or “a 3D rotating spaceship viewer”"></textarea>
         <div class="build-actions">
           <button id="buildGo" class="chip accent">⚙ Generate</button>
+          <button id="buildApply" class="chip" disabled>✎ Apply change</button>
+          <button id="buildNew" class="chip">＋ New</button>
+          <button id="buildSave" class="chip" disabled>💾 Save</button>
           <button id="buildOpen" class="chip" disabled>↗ Open</button>
           <button id="buildZip" class="chip" disabled>⬇ ZIP</button>
           <button id="buildPublish" class="chip" disabled>🌐 Publish</button>
         </div>
         <div id="buildStatus" class="muted"></div>
         <div id="buildMetrics" class="build-metrics" style="display:none"></div>
+        <div id="buildLibrary" class="build-library"></div>
         <div id="buildFiles" class="build-files"></div>
         <iframe id="buildPreview" class="build-preview" title="Program preview"
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-pointer-lock"></iframe>

@@ -88,6 +88,14 @@ screen wake-lock so a build isn't killed by the screen sleeping. (True
 keep-running-in-the-background needs a server; the `web/proxy/` worker is where
 that would live.)
 
+**Saved programs + AI edits.** Tap **💾 Save** to keep a build in a persistent
+on-device **library** (IndexedDB) that survives restarts. **Open** any saved
+program back into the preview, then request changes — **✎ Apply change** or just
+say/type "make the snake red" / "add a score counter" — and ACTIG edits the
+loaded program, re-tests it, updates the preview, and re-saves it. **＋ New**
+starts a fresh build. (The library is local to the device; each program is also
+downloadable as a ZIP or publishable to a URL for real backup.)
+
 **Quality pipeline (no extra cost, same model).** Higher output quality comes from
 *inference-time* technique, not from changing the model or paying: Vibe Build can
 **plan → generate best-of-N candidates → actually run each in a sandbox →

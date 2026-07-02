@@ -34,6 +34,12 @@ HARD RULES:
 
 Build EXACTLY what the user asks — complete, correct, optimized, and genuinely high quality.`;
 
+const EDITOR = `You are editing an EXISTING browser-only web app. Apply the user's requested change(s) to the given files. Preserve everything that already works; change only what the request needs. Keep it a complete, self-contained, runnable program: index.html entry point, libraries via CDN <script> tags, NO ES module imports between your own files. Return the COMPLETE updated project (every file in full).
+
+${OUTPUT_FORMAT}
+
+No explanations.`;
+
 const REVIEWER = `You are a ruthless senior code reviewer and QA engineer for a browser-only web app. You will be given the current program files and a list of concrete defects found by ACTUALLY RUNNING it (runtime/console errors) plus a feature checklist. Fix EVERY defect and any other bug, missing feature, accessibility, or robustness issue you can find. Return the COMPLETE corrected project (every file in full), not a diff.
 
 ${OUTPUT_FORMAT}
@@ -65,14 +71,54 @@ window.addEventListener("load",function(){setTimeout(send,900);});setTimeout(sen
   return probe + html;
 }
 
+/* ---- IndexedDB: durable library of saved programs ---- */
+const DB_NAME = "actig", DB_STORE = "programs";
+function idbOpen() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB_NAME, 1);
+    r.onupgradeneeded = () => { const db = r.result; if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE, { keyPath: "id" }); };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idbAll() {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const rq = db.transaction(DB_STORE, "readonly").objectStore(DB_STORE).getAll();
+    rq.onsuccess = () => res(rq.result || []);
+    rq.onerror = () => rej(rq.error);
+  });
+}
+async function idbPut(rec) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(DB_STORE, "readwrite");
+    tx.objectStore(DB_STORE).put(rec);
+    tx.oncomplete = () => res(rec);
+    tx.onerror = () => rej(tx.error);
+  });
+}
+async function idbDel(id) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(DB_STORE, "readwrite");
+    tx.objectStore(DB_STORE).delete(id);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
 export function createBuilder(deps) {
-  let last = null;               // { files, previewUrl, blobUrls }
+  let last = null;               // { files, previewUrl, blobUrls, eval }
+  let lastSpec = "";             // the spec/description behind `last`
+  let currentId = null, currentName = "", currentCreatedAt = null; // saved-library link
 
   /* ---- generation pipeline: plan → best-of-N → run-eval → self-repair ----
      Checkpoints after every stage to deps.store.buildWip so a build interrupted by
      the OS suspending the app (backgrounding) resumes from where it stopped. */
   async function generate(spec, { onStatus, atts = [], resume = null } = {}) {
     revokeLast();
+    currentId = null; currentName = ""; currentCreatedAt = null; lastSpec = spec; // a fresh build is a new, unsaved program
     const tier = TIERS[deps.store.quality] || TIERS.max;
     const ref = resume ? (resume.ref || "") : attachmentContext(atts);
     let checklist = resume ? (resume.checklist || []) : [];
@@ -318,6 +364,95 @@ export function createBuilder(deps) {
     deps.dom.publishBtn.disabled = false;
   }
 
+  /* ---- saved-programs library (IndexedDB) ---- */
+  async function saveCurrent(name) {
+    if (!last) throw new Error("nothing to save yet — generate a program first");
+    const now = Date.now();
+    const id = currentId || ("p" + now + "_" + Math.random().toString(36).slice(2, 7));
+    const rec = {
+      id, name: (name || currentName || lastSpec || "Untitled").toString().slice(0, 80),
+      spec: lastSpec, files: last.files, metrics: last.eval || null,
+      createdAt: currentCreatedAt || now, updatedAt: now,
+    };
+    await idbPut(rec);
+    currentId = id; currentName = rec.name; currentCreatedAt = rec.createdAt;
+    await renderLibrary();
+    return rec;
+  }
+  async function open(id) {
+    const rec = (await idbAll()).find(r => r.id === id);
+    if (!rec) throw new Error("saved program not found");
+    revokeLast();
+    const { previewUrl, blobUrls } = assemblePreview(rec.files);
+    last = { files: rec.files, previewUrl, blobUrls, eval: rec.metrics };
+    currentId = rec.id; currentName = rec.name; currentCreatedAt = rec.createdAt; lastSpec = rec.spec || "";
+    render(rec.files, previewUrl);
+    if (rec.metrics) renderMetrics(rec.metrics, "Saved");
+    deps.onActive?.(rec);
+    await renderLibrary();
+    return rec;
+  }
+  async function remove(id) {
+    await idbDel(id);
+    if (currentId === id) { currentId = null; currentName = ""; currentCreatedAt = null; }
+    await renderLibrary();
+  }
+  async function renderLibrary() {
+    const el = deps.dom.libraryEl; if (!el) return;
+    let items = [];
+    try { items = await idbAll(); } catch {}
+    items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    el.innerHTML = `<div class="lib-head">Saved programs (${items.length})</div>`;
+    if (!items.length) { el.insertAdjacentHTML("beforeend", `<div class="lib-empty">Build one, then tap 💾 Save to keep it here.</div>`); return; }
+    for (const r of items) {
+      const row = document.createElement("div"); row.className = "lib-row" + (r.id === currentId ? " active" : "");
+      const meta = document.createElement("div"); meta.className = "lib-meta";
+      meta.textContent = `${r.name} · ${new Date(r.updatedAt || r.createdAt).toLocaleDateString()}${r.metrics ? " · " + r.metrics.score + "/100" : ""}`;
+      row.appendChild(meta);
+      const acts = document.createElement("div"); acts.className = "lib-acts";
+      const mk = (label, fn) => { const b = document.createElement("button"); b.className = "lib-btn"; b.textContent = label; b.onclick = fn; acts.appendChild(b); };
+      mk("Open", () => open(r.id).catch(e => deps.addBubble("sys", "Open failed: " + (e?.message || e))));
+      mk("Adjust", () => open(r.id).then(() => deps.onAdjustRequested?.(r)).catch(e => deps.addBubble("sys", "Open failed: " + (e?.message || e))));
+      mk("ZIP", () => open(r.id).then(() => downloadZip()));
+      mk("Delete", () => { if (confirm(`Delete “${r.name}”?`)) remove(r.id); });
+      row.appendChild(acts);
+      el.appendChild(row);
+    }
+  }
+
+  /* ---- AI edit: apply a requested change to the loaded program ---- */
+  async function applyAdjustment(request, { onStatus } = {}) {
+    if (!last) throw new Error("open or generate a program first, then request a change");
+    const tier = TIERS[deps.store.quality] || TIERS.max;
+    const filesBlock = Object.entries(last.files).map(([p, c]) => `===FILE: ${p}===\n${c}`).join("\n");
+    const user = `Current program:\n${filesBlock}\n\nRequested change:\n${request}\n\nReturn the COMPLETE updated project.`;
+    onStatus?.("Applying change…");
+    const raw = await deps.llmGenerate(EDITOR, user, {
+      onToken: (_d, full) => onStatus?.(`Editing… ${full.length.toLocaleString()} chars`),
+      maxTokens: tier.tokens || 8000, temperature: 0.2,
+    });
+    let files = parseFiles(raw);
+    if (!files["index.html"]) throw new Error("the edit didn't return a valid program — try rephrasing");
+    onStatus?.("Testing…");
+    let evalRes = await evaluate(files, []);
+    renderMetrics(evalRes, "Edited");
+    if (tier.repairs > 0 && evalRes.score < 100) {          // one light repair pass for edits
+      onStatus?.("Repairing…");
+      try {
+        const f2 = parseFiles(await repairOnce(files, evalRes, []));
+        if (f2["index.html"]) { const e2 = await evaluate(f2, []); if (e2.score >= evalRes.score) { files = f2; evalRes = e2; renderMetrics(evalRes, "Edited (repaired)"); } }
+      } catch {}
+    }
+    revokeLast();
+    const { previewUrl, blobUrls } = assemblePreview(files);
+    last = { files, previewUrl, blobUrls, eval: evalRes };
+    lastSpec = lastSpec ? `${lastSpec} | ${request}` : request;
+    render(files, previewUrl);
+    if (currentId) { try { await saveCurrent(currentName); } catch {} } // auto-update the saved entry
+    onStatus?.(`Change applied ✓ (quality ${evalRes.score}/100)`);
+    return { files, previewUrl, entry: "index.html", metrics: evalRes };
+  }
+
   /* ---- downloadable ZIP of the real source ---- */
   async function downloadZip() {
     if (!last) return;
@@ -391,5 +526,14 @@ export function createBuilder(deps) {
     }
   };
 
-  return { generate, downloadZip, publish };
+  // initial library paint
+  renderLibrary();
+
+  return {
+    generate, downloadZip, publish,
+    saveCurrent, open, remove, renderLibrary, applyAdjustment,
+    hasProgram: () => !!last,
+    defaultName: () => (currentName || lastSpec || "").toString().slice(0, 60),
+    isSaved: () => !!currentId,
+  };
 }

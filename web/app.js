@@ -636,7 +636,15 @@ async function submit(text, source, atts) {
   if (/\b(build|make|create|generate|develop|code)\b[\s\S]*\b(app|application|web ?app|web ?site|website|web ?page|page|site|game|program|tool|dashboard|landing|clone|3d|three ?d|model|viewer|simulation|visuali[sz]er)\b/.test(low)
       || /^\s*vibe ?code\b/.test(low)) {
     const spec = text.replace(/^\s*(please\s+)?(vibe ?code|build|make|create|generate|develop|code)\s+(me\s+)?(a|an|the)?\s*/i, "").trim() || text;
+    clearBuildEditMode();
     runBuild(spec, source, lang, atts);
+    return;
+  }
+
+  // Adjust the loaded program — when a saved/loaded program is active and the
+  // message reads like an edit instruction, apply it instead of chatting.
+  if (buildEditMode && /\b(add|change|make it|make the|remove|delete|adjust|edit|update|modify|set (the|it)|rename|replace|turn .* into|fix|increase|decrease|resize|recolor|restyle|move|swap|instead|also add|also make)\b/i.test(low)) {
+    runAdjust(text, source);
     return;
   }
 
@@ -736,7 +744,7 @@ function switchTab(name) {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   $("tab-" + name).classList.add("active");
   if (name === "studio") ensureStudio();
-  if (name === "build") ensureBuild();
+  if (name === "build") ensureBuild().then(b => b && b.renderLibrary && b.renderLibrary()).catch(() => {});
 }
 
 /* ---------- 3D studio (lazy) ---------- */
@@ -758,9 +766,12 @@ async function ensureBuild() {
     llmGenerate, store, addBubble,
     dom: {
       iframe: $("buildPreview"), fileList: $("buildFiles"), statusEl: $("buildStatus"),
-      metricsEl: $("buildMetrics"),
+      metricsEl: $("buildMetrics"), libraryEl: $("buildLibrary"),
       openBtn: $("buildOpen"), zipBtn: $("buildZip"), publishBtn: $("buildPublish"),
     },
+    // a saved program was loaded → enter edit mode so requests adjust it
+    onActive: (rec) => setBuildEditMode(rec?.name || ""),
+    onAdjustRequested: () => { switchTab("build"); const el = $("buildSpec"); el.placeholder = `Describe a change to “${buildActiveName}”…`; el.focus(); },
   });
   return builder;
 }
@@ -770,10 +781,45 @@ async function ensureBuild() {
    build.js) and AUTO-RESUME the moment ACTIG is foregrounded again, and hold a
    screen wake-lock so a build isn't killed by the screen sleeping. */
 let building = false, wakeLock = null;
+let buildEditMode = false, buildActiveName = "";
 async function acquireWakeLock() {
   try { if ("wakeLock" in navigator && document.visibilityState === "visible") wakeLock = await navigator.wakeLock.request("screen"); } catch {}
 }
 function releaseWakeLock() { try { wakeLock && wakeLock.release(); } catch {} wakeLock = null; }
+
+/* A saved program is loaded → subsequent requests adjust it (until "New"). */
+function setBuildEditMode(name) {
+  buildEditMode = true; buildActiveName = name || "";
+  const s = $("buildSave"), a = $("buildApply");
+  if (s) s.disabled = false;
+  if (a) a.disabled = false;
+  setStatus(`Editing “${buildActiveName}” — say or type a change`);
+}
+function clearBuildEditMode() {
+  buildEditMode = false; buildActiveName = "";
+  const el = $("buildSpec"); if (el) { el.value = ""; el.placeholder = "Describe a program to build…"; }
+  const a = $("buildApply"); if (a) a.disabled = true;
+}
+
+/* Apply a requested change to the loaded program via the AI editor. */
+async function runAdjust(request, source) {
+  if (building) { addBubble("sys", "Busy — one build/edit at a time."); return; }
+  building = true; acquireWakeLock();
+  switchTab("build");
+  const b = await ensureBuild().catch(() => null);
+  if (!b || !b.hasProgram()) { building = false; releaseWakeLock(); addBubble("sys", "Open or generate a program first, then request a change."); return; }
+  addBubble("ai", "Applying your change…");
+  if (source === "voice") speak("Applying your change, sir.", "en-US");
+  setStatus("Editing…"); $("buildStatus").textContent = "Editing…";
+  try {
+    const res = await b.applyAdjustment(request, { onStatus: (s) => { setStatus(s); $("buildStatus").textContent = s; } });
+    notifyBuildDone(res, source, b.isSaved() ? " (saved changes)" : "");
+  } catch (e) {
+    setStatus("Edit failed"); $("buildStatus").textContent = "Edit failed: " + shortErr(e);
+    addBubble("sys", "Edit failed: " + shortErr(e));
+    if (source === "voice") speak("Sorry, the change failed.", "en-US");
+  } finally { building = false; releaseWakeLock(); }
+}
 
 /* Generate a program from a spec, then auto-deliver the testable link(s).
    `resume` (a saved checkpoint) continues an interrupted build. */
@@ -816,10 +862,14 @@ async function resumeBuild() {
 
 /* Announce completion three ways: a chat bubble with the link, spoken TTS, and a
    Web Notification. Auto-publishes a public URL if a GitHub token is configured. */
-function notifyBuildDone(res, source) {
+function notifyBuildDone(res, source, note = "") {
   const score = res.metrics ? ` (quality ${res.metrics.score}/100)` : "";
+  const saveBtn = $("buildSave"); if (saveBtn) saveBtn.disabled = false;   // can now save/update
+  const applyBtn = $("buildApply"); if (applyBtn) applyBtn.disabled = false;
+  buildEditMode = true;                                                     // allow "make it red" follow-ups
+  buildActiveName = (builder && builder.defaultName && builder.defaultName()) || buildActiveName;
   setStatus("Build finished ✓");
-  const b = addBubble("ai", `✅ Build finished${score} — your program is ready to test.`);
+  const b = addBubble("ai", `✅ Build finished${score}${note} — your program is ready to test.`);
   const wrap = document.createElement("div"); wrap.className = "chips";
   const open = document.createElement("span"); open.className = "opt"; open.textContent = "▶ Open program";
   open.onclick = () => window.open(res.previewUrl, "_blank"); wrap.appendChild(open);
@@ -886,7 +936,17 @@ function boot() {
   $("del").onclick = () => studio?.remove();
   $("gesture").onclick = (e) => { ensureStudio().then(() => { const on = studio?.toggleGestures(); e.target.classList.toggle("on", on); }); };
   // Vibe Build
-  $("buildGo").onclick = () => { const v = $("buildSpec").value.trim(); if (v) runBuild(v, "text", "en-US"); };
+  $("buildGo").onclick = () => { const v = $("buildSpec").value.trim(); if (v) { clearBuildEditMode(); runBuild(v, "text", "en-US"); } };
+  $("buildApply").onclick = () => { const v = $("buildSpec").value.trim(); if (!v) { addBubble("sys", "Type the change to apply first."); return; } $("buildSpec").value = ""; runAdjust(v, "text"); };
+  $("buildNew").onclick = () => { clearBuildEditMode(); setStatus("Ready for a new build"); };
+  $("buildSave").onclick = async () => {
+    const b = await ensureBuild().catch(() => null);
+    if (!b || !b.hasProgram()) { addBubble("sys", "Generate or open a program first."); return; }
+    const name = (prompt("Save program as:", b.defaultName() || "My program") || "").trim();
+    if (!name) return;
+    try { await b.saveCurrent(name); setBuildEditMode(name); addBubble("ai", `💾 Saved “${name}” to your library.`); }
+    catch (e) { addBubble("sys", "Save failed: " + shortErr(e)); }
+  };
 
   setStatus('Tap 🎤 to turn on the mic');
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
