@@ -40,6 +40,24 @@
       </div>
     </section>
 
+    <!-- VIBE BUILD -->
+    <section id="tab-build" class="tab">
+      <div class="build">
+        <textarea id="buildSpec" class="build-spec" rows="3"
+          placeholder="Describe a program to build… e.g. “a neon snake game”, “a markdown notes app”, or “a 3D rotating spaceship viewer”"></textarea>
+        <div class="build-actions">
+          <button id="buildGo" class="chip accent">⚙ Generate</button>
+          <button id="buildOpen" class="chip" disabled>↗ Open</button>
+          <button id="buildZip" class="chip" disabled>⬇ ZIP</button>
+          <button id="buildPublish" class="chip" disabled>🌐 Publish</button>
+        </div>
+        <div id="buildStatus" class="muted"></div>
+        <div id="buildFiles" class="build-files"></div>
+        <iframe id="buildPreview" class="build-preview" title="Program preview"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-pointer-lock"></iframe>
+      </div>
+    </section>
+
     <!-- SETTINGS -->
     <section id="tab-settings" class="tab">
       <div class="settings">
@@ -57,6 +75,16 @@
           <input id="endpoint" type="text" placeholder="https://text.pollinations.ai/openai" autocomplete="off" />
         </label>
         <label><input id="preferOffline" type="checkbox" /> Prefer offline (no cloud)</label>
+        <h3>Vibe Build (AI program generator)</h3>
+        <p class="muted">Describe a program in chat/voice or the Build tab and ACTIG
+        writes it, previews it live, and gives you a testable link + ZIP. Uses the
+        brain above (NVIDIA if configured, else the free one).</p>
+        <label>Build model (optional — overrides the model above for code)
+          <input id="buildModel" type="text" placeholder="(use default)" autocomplete="off" />
+        </label>
+        <label>GitHub token (optional — enables a public shareable URL)
+          <input id="ghToken" type="password" placeholder="ghp_… (gist scope)" autocomplete="off" />
+        </label>
         <button id="saveKey" class="chip">Save</button>
         <h3>Wake & reaction</h3>
         <p class="muted">Wake phrase: “wake up ACTIG” · Reaction: “ACTIG at your service sir”</p>
@@ -85,6 +113,7 @@
     <!-- Tab switcher -->
     <nav class="tabs">
       <button data-tab="chat" class="active">Chat</button>
+      <button data-tab="build">Build</button>
       <button data-tab="studio">3D</button>
       <button data-tab="settings">Settings</button>
     </nav>

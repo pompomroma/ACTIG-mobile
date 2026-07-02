@@ -34,6 +34,19 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
 .chip.danger{border-color:var(--danger);color:var(--danger)}
 .chip.on{background:var(--primary);color:#021018}
 
+/* ---- Vibe Build ---- */
+.build{display:flex;flex-direction:column;gap:8px;padding:10px;min-height:0;flex:1}
+.build-spec{padding:10px;border-radius:10px;border:1px solid var(--line);
+  background:rgba(0,0,0,.3);color:var(--text);font-family:inherit;resize:vertical}
+.build-actions{display:flex;gap:6px;flex-wrap:wrap}
+.build-actions .chip.accent{border-color:var(--accent);color:var(--accent)}
+.build-actions .chip:disabled{opacity:.4;cursor:default}
+.build-files{max-height:96px;overflow:auto;display:flex;flex-direction:column;gap:2px;
+  font-size:12px;color:var(--accent);opacity:.85}
+.build-file{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.build-preview{flex:1;min-height:220px;width:100%;border:1px solid var(--line);
+  border-radius:10px;background:#fff}
+
 .settings{padding:16px;display:flex;flex-direction:column;gap:12px;overflow:auto}
 .settings h3{margin:8px 0 0;color:var(--primary)}
 .settings label{display:flex;flex-direction:column;gap:6px;font-size:14px}

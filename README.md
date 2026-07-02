@@ -70,8 +70,19 @@ Add to Home Screen** —
 because the working branch name contains slashes that CDNs can't parse). No PC, no Apple account, no
 signing, no key. The AI answers immediately via a free, browser-friendly brain.
 Covers chat, voice in/out, wake word, language switch, the 3D studio,
-and history; native-only features (Siri, widgets, HealthKit, Apple's on-device
-model) need the native app. For a permanent `github.io` URL, the owner can enable
+history, and **Vibe Build** (see below); native-only features (Siri, widgets,
+HealthKit, Apple's on-device model) need the native app.
+
+**Vibe Build — describe a program, get a testable link.** In the **Build** tab
+(or just say/type "build me a neon snake game" / "build a 3D spaceship viewer"),
+ACTIG generates a complete, self-contained client-side web program, runs it in a
+live in-browser preview, and gives you an **Open** link + a **ZIP** of the source
+(3D emitted as text glTF/OBJ). It auto-announces "build finished" via chat, voice,
+and a notification. It uses the configured brain — NVIDIA Nemotron if you set a
+key + the proxy (`web/proxy/`), otherwise the free brain. Add a GitHub token in
+Settings to also **Publish** a public shareable URL (via Gist + gist.githack).
+Note: a static web app can run front-end code from a link but not a real server —
+backend needs are approximated in-browser. For a permanent `github.io` URL, the owner can enable
 Pages once and run `.github/workflows/pages.yml` — details in
 [`docs/INSTALL_NO_MAC.md`](docs/INSTALL_NO_MAC.md).
 

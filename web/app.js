@@ -27,6 +27,11 @@ const store = {
   set offline(v) { localStorage.setItem("actig.offline", v ? "1" : "0"); },
   get model() { return (localStorage.getItem("actig.model") || DEFAULT_MODEL).trim(); },
   set model(v) { localStorage.setItem("actig.model", (v || "").trim() || DEFAULT_MODEL); },
+  // Vibe Build: optional code model override, and a GitHub token for public URLs.
+  get buildModel() { return (localStorage.getItem("actig.buildModel") || "").trim(); },
+  set buildModel(v) { localStorage.setItem("actig.buildModel", (v || "").trim()); },
+  get ghToken() { return (localStorage.getItem("actig.ghToken") || "").trim(); },
+  set ghToken(v) { localStorage.setItem("actig.ghToken", (v || "").trim()); },
   get history() { try { return JSON.parse(localStorage.getItem("actig.history") || "[]"); } catch { return []; } },
   set history(v) { localStorage.setItem("actig.history", JSON.stringify(v.slice(-400))); },
 };
@@ -414,19 +419,16 @@ async function pollinationsGet(history, lang, onToken) {
   throw lastErr || new Error("no response");
 }
 
-/* OpenAI-compatible streaming POST (NVIDIA via proxy, or Pollinations fallback).
-   Returns the reply text; throws on failure (with .status/.body for HTTP errors). */
-async function openaiPost(endpoint, history, lang, onToken, key) {
-  const msgs = [{ role: "system", content: systemPrompt(lang) }].concat(
-    history.filter(m => m.role !== "sys")
-      .map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }))
-  );
+/* OpenAI-compatible streaming POST core. Takes an explicit messages array and
+   params so both chat and the code generator can share it. Returns the reply
+   text; throws on failure (with .status/.body for HTTP errors). */
+async function openaiPostRaw(endpoint, messages, { onToken, key, model, maxTokens = 512, temperature = 0.6 } = {}) {
   const headers = { "content-type": "application/json" };
   if (key) headers["authorization"] = "Bearer " + key;
   const res = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({ model: store.model, messages: msgs, max_tokens: 512, temperature: 0.6, stream: true }),
+    body: JSON.stringify({ model: model || store.model, messages, max_tokens: maxTokens, temperature, stream: true }),
   });
   if (!res.ok) {
     const err = new Error("HTTP " + res.status);
@@ -444,6 +446,62 @@ async function openaiPost(endpoint, history, lang, onToken, key) {
   const full = await readStream(res.body, onToken);
   if (!full) throw new Error("empty reply");
   return full;
+}
+
+/* Chat POST (NVIDIA via proxy, or Pollinations fallback). */
+async function openaiPost(endpoint, history, lang, onToken, key) {
+  const messages = [{ role: "system", content: systemPrompt(lang) }].concat(
+    history.filter(m => m.role !== "sys")
+      .map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }))
+  );
+  return openaiPostRaw(endpoint, messages, { onToken, key, model: store.model, maxTokens: 512, temperature: 0.6 });
+}
+
+/* Generic single-shot generation with an arbitrary system+user prompt — used by
+   the code generator (Vibe Build). Auto-picks the provider like chat does: keyless
+   default (Pollinations) tries the no-preflight GET first for large outputs and
+   falls back to POST; a keyed endpoint (NVIDIA proxy) uses POST. */
+async function llmGenerate(system, user, { onToken, maxTokens = 4000, temperature = 0.3 } = {}) {
+  if (store.offline) throw new Error("offline mode is on — turn off ‘Prefer offline’ in Settings");
+  const endpoint = store.endpoint;
+  const keyless = KEYLESS.test(endpoint);
+  const key = store.key;
+  const model = store.buildModel || store.model;
+  const messages = [{ role: "system", content: system }, { role: "user", content: user }];
+  if (keyless) {
+    // Streaming GET first (no CORS preflight); POST as a fallback.
+    try { return await pollinationsGenerate(system, user, model, onToken); }
+    catch { return await openaiPostRaw(endpoint, messages, { onToken, key: "", model, maxTokens, temperature }); }
+  }
+  return await openaiPostRaw(endpoint, messages, { onToken, key, model, maxTokens, temperature });
+}
+
+/* Pollinations GET for a system+user codegen prompt (no preflight, streamed). */
+async function pollinationsGenerate(system, user, model, onToken) {
+  const prompt = system + "\n\n" + user;
+  const enc = encodeURIComponent(prompt);
+  const m = encodeURIComponent(model || "openai");
+  const variants = [
+    `https://text.pollinations.ai/${enc}?model=${m}&stream=true&referrer=actig-pwa`,
+    `https://text.pollinations.ai/${enc}?model=${m}&referrer=actig-pwa`,
+  ];
+  let lastErr;
+  for (let i = 0; i < variants.length; i++) {
+    try {
+      const res = await fetch(variants[i]);
+      if (!res.ok) { lastErr = new Error("GET " + res.status); continue; }
+      if (i === 0 && res.body && res.body.getReader) {
+        const full = await readStream(res.body, onToken);
+        if (full) return full;
+        lastErr = new Error("empty stream"); continue;
+      }
+      const text = (await res.text()).trim();
+      if (!text) { lastErr = new Error("empty reply"); continue; }
+      onToken?.(text, text);
+      return text;
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("no response");
 }
 
 /* Turn an HTTP failure into a clear, actionable line instead of a vague "offline". */
@@ -498,6 +556,14 @@ async function submit(text, source) {
   }
   if (/(mute).*(me|mic)|음소거/.test(low)) { setUserMuted(true); return finish("Your mic is muted.", lang, source); }
   if (/(be quiet|mute (yourself|ai)|stop talking|조용히)/.test(low)) { setAIMuted(true); return finish("Voice muted.", lang, source); }
+
+  // Vibe Build — "build/make/create/generate a … app/website/game/3D/program".
+  if (/\b(build|make|create|generate|develop|code)\b[\s\S]*\b(app|application|web ?app|web ?site|website|web ?page|page|site|game|program|tool|dashboard|landing|clone|3d|three ?d|model|viewer|simulation|visuali[sz]er)\b/.test(low)
+      || /^\s*vibe ?code\b/.test(low)) {
+    const spec = text.replace(/^\s*(please\s+)?(vibe ?code|build|make|create|generate|develop|code)\s+(me\s+)?(a|an|the)?\s*/i, "").trim() || text;
+    runBuild(spec, source, lang);
+    return;
+  }
 
   // LLM brain — stream straight into a live bubble so the reply appears (and,
   // for voice, starts speaking) the moment the first tokens land.
@@ -576,6 +642,7 @@ function switchTab(name) {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   $("tab-" + name).classList.add("active");
   if (name === "studio") ensureStudio();
+  if (name === "build") ensureBuild();
 }
 
 /* ---------- 3D studio (lazy) ---------- */
@@ -588,6 +655,73 @@ async function ensureStudio() {
   } catch (e) { addBubble("sys", "3D studio needs a network connection the first time."); }
 }
 
+/* ---------- Vibe Build (lazy) — AI generates a full client-side program ---------- */
+let builder = null;
+async function ensureBuild() {
+  if (builder) return builder;
+  const mod = await import("./build.js");
+  builder = mod.createBuilder({
+    llmGenerate, store, addBubble,
+    dom: {
+      iframe: $("buildPreview"), fileList: $("buildFiles"), statusEl: $("buildStatus"),
+      openBtn: $("buildOpen"), zipBtn: $("buildZip"), publishBtn: $("buildPublish"),
+    },
+  });
+  return builder;
+}
+
+/* Generate a program from a spec, then auto-deliver the testable link(s). */
+async function runBuild(spec, source, lang) {
+  switchTab("build");
+  try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); } catch {}
+  const b = await ensureBuild().catch(() => null);
+  if (!b) { addBubble("sys", "Build engine failed to load (needs a network connection)."); return; }
+  addBubble("ai", "On it — generating your program. This can take up to a minute…");
+  if (source === "voice") speak("On it. Generating your program now, sir.", "en-US");
+  setStatus("Building…");
+  $("buildStatus").textContent = "Building…";
+  try {
+    const res = await b.generate(spec, { onStatus: (s) => { setStatus(s); $("buildStatus").textContent = s; } });
+    notifyBuildDone(res, source);
+  } catch (e) {
+    setStatus("Build failed");
+    $("buildStatus").textContent = "Build failed: " + shortErr(e);
+    addBubble("sys", "Build failed: " + shortErr(e));
+    if (source === "voice") speak("Sorry, the build failed.", "en-US");
+  }
+}
+
+/* Announce completion three ways: a chat bubble with the link, spoken TTS, and a
+   Web Notification. Auto-publishes a public URL if a GitHub token is configured. */
+function notifyBuildDone(res, source) {
+  setStatus("Build finished ✓");
+  const b = addBubble("ai", "✅ Build finished — your program is ready to test.");
+  const wrap = document.createElement("div"); wrap.className = "chips";
+  const open = document.createElement("span"); open.className = "opt"; open.textContent = "▶ Open program";
+  open.onclick = () => window.open(res.previewUrl, "_blank"); wrap.appendChild(open);
+  const zip = document.createElement("span"); zip.className = "opt"; zip.textContent = "⬇ Download ZIP";
+  zip.onclick = () => builder?.downloadZip(); wrap.appendChild(zip);
+  b.appendChild(wrap);
+  speak("Your program is ready, sir. The build is finished.", "en-US");
+  webNotify("ACTIG — build finished", "Your program is ready to test.", res.previewUrl);
+  if (store.ghToken && builder) {
+    $("buildStatus").textContent = "Publishing public link…";
+    builder.publish()
+      .then(url => { addBubble("ai", "🌐 Public link (share/test anywhere): " + url); $("buildStatus").textContent = "Public URL ready"; })
+      .catch(e => { addBubble("sys", "Auto-publish failed: " + shortErr(e)); });
+  }
+}
+
+/* Best-effort desktop/PWA notification (installed PWAs on iOS 16.4+). */
+function webNotify(title, body, url) {
+  try {
+    if (!("Notification" in window)) return;
+    const show = () => { const n = new Notification(title, { body }); n.onclick = () => { window.open(url, "_blank"); n.close(); }; };
+    if (Notification.permission === "granted") show();
+    else if (Notification.permission !== "denied") Notification.requestPermission().then(p => { if (p === "granted") show(); });
+  } catch {}
+}
+
 /* ---------- wiring ---------- */
 function boot() {
   // restore transcript
@@ -595,10 +729,13 @@ function boot() {
   // settings
   $("apiKey").value = store.key; $("preferOffline").checked = store.offline;
   $("model").value = store.model; $("endpoint").value = store.endpoint;
+  $("buildModel").value = store.buildModel; $("ghToken").value = store.ghToken;
   $("saveKey").onclick = () => {
     store.key = $("apiKey").value;
     store.model = $("model").value;
     store.endpoint = $("endpoint").value;
+    store.buildModel = $("buildModel").value;
+    store.ghToken = $("ghToken").value;
     store.offline = $("preferOffline").checked;
     $("model").value = store.model; $("endpoint").value = store.endpoint; // reflect defaults
     setStatus("Saved");
@@ -619,6 +756,8 @@ function boot() {
   $("clone").onclick = () => studio?.clone();
   $("del").onclick = () => studio?.remove();
   $("gesture").onclick = (e) => { ensureStudio().then(() => { const on = studio?.toggleGestures(); e.target.classList.toggle("on", on); }); };
+  // Vibe Build
+  $("buildGo").onclick = () => { const v = $("buildSpec").value.trim(); if (v) runBuild(v, "text", "en-US"); };
 
   setStatus('Tap 🎤 to turn on the mic');
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
