@@ -190,9 +190,31 @@ export async function createStudio(host) {
     return true;
   }
 
-  /* ---- camera hand control (MediaPipe) — select, drag, strain ---- */
+  /* ---- camera hand control (MediaPipe) — select, drag, strain ----
+     Cognition stack: 1080p60 capture, GPU inference, frame-synced detection,
+     tuned confidence thresholds, per-slot identity matching (hands don't swap),
+     One-Euro adaptive filtering (steady when slow, no lag when fast), pinch
+     measured at the thumb–index midpoint with depth-normalized hysteresis. */
   let gesturesOn = false, handLandmarker = null, video = null, rafId = 0, usingRVFC = false;
-  const H = [ { pinch: false, x: 0, y: 0, seen: false }, { pinch: false, x: 0, y: 0, seen: false } ];
+
+  /* One-Euro filter: adaptive low-pass — heavy smoothing at low speed (kills
+     jitter), light smoothing at high speed (kills lag). */
+  function oneEuro({ minCutoff = 1.4, beta = 0.25, dCutoff = 1.0 } = {}) {
+    let xP = null, dxP = 0, tP = 0;
+    const alpha = (c, dt) => { const r = 2 * Math.PI * c * dt; return r / (r + 1); };
+    const f = (x, t) => {
+      if (xP === null) { xP = x; tP = t; return x; }
+      const dt = Math.max((t - tP) / 1000, 1e-3); tP = t;
+      const dx = (x - xP) / dt;
+      dxP += alpha(dCutoff, dt) * (dx - dxP);
+      xP += alpha(minCutoff + beta * Math.abs(dxP), dt) * (x - xP);
+      return xP;
+    };
+    f.reset = () => { xP = null; dxP = 0; };
+    return f;
+  }
+  const newHand = () => ({ pinch: false, x: 0, y: 0, wx: 0, wy: 0, seen: false, fx: oneEuro(), fy: oneEuro() });
+  const H = [newHand(), newHand()];
   let grab = null, grabStartScale = new THREE.Vector3(), grabStart = { x: 0, y: 0 };
   let two = null;                                   // two-hand strain session
 
@@ -211,10 +233,13 @@ export async function createStudio(host) {
         delegate: "GPU",                             // faster than CPU
       },
       numHands: 2, runningMode: "VIDEO",             // two-hand cognition
+      minHandDetectionConfidence: 0.4,               // acquire hands fast
+      minHandPresenceConfidence: 0.5,
+      minTrackingConfidence: 0.6,                    // but hold tracks firmly
     });
     video = document.createElement("video"); video.playsInline = true; video.muted = true;
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720}, frameRate: { ideal: 60 } },
+      video: { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
     });
     video.srcObject = stream; await video.play();
     usingRVFC = typeof video.requestVideoFrameCallback === "function";
@@ -230,21 +255,40 @@ export async function createStudio(host) {
     if (usingRVFC) usingRVFC = false; else cancelAnimationFrame(rafId);
     video?.srcObject?.getTracks().forEach(t => t.stop());
     handLandmarker = null; video = null; grab = null; two = null;
-    H.forEach(h => { h.pinch = false; h.seen = false; });
+    H.forEach(h => { h.pinch = false; h.seen = false; h.fx.reset(); h.fy.reset(); });
+  }
+  /* Assign detected hands to stable slots by wrist proximity, so slot 0 stays the
+     SAME physical hand across frames (no identity swaps mid-drag). */
+  function assignSlots(lms) {
+    if (lms.length < 2) {
+      if (!lms.length) return [null, null];
+      const w = lms[0][0];
+      const d0 = H[0].seen ? Math.hypot(w.x - H[0].wx, w.y - H[0].wy) : (H[1].seen ? 1e9 : 0);
+      const d1 = H[1].seen ? Math.hypot(w.x - H[1].wx, w.y - H[1].wy) : 1e9;
+      return d0 <= d1 ? [lms[0], null] : [null, lms[0]];
+    }
+    const a = lms[0][0], b = lms[1][0];
+    const straight = (H[0].seen ? Math.hypot(a.x - H[0].wx, a.y - H[0].wy) : 0)
+                   + (H[1].seen ? Math.hypot(b.x - H[1].wx, b.y - H[1].wy) : 0);
+    const swapped = (H[0].seen ? Math.hypot(b.x - H[0].wx, b.y - H[0].wy) : 0)
+                  + (H[1].seen ? Math.hypot(a.x - H[1].wx, a.y - H[1].wy) : 0);
+    return straight <= swapped ? [lms[0], lms[1]] : [lms[1], lms[0]];
   }
   function detect() {
     if (!handLandmarker || !video) return;
-    const res = handLandmarker.detectForVideo(video, performance.now());
-    const lms = res.landmarks || [];
+    const now = performance.now();
+    const res = handLandmarker.detectForVideo(video, now);
+    const slots = assignSlots(res.landmarks || []);
     for (let i = 0; i < 2; i++) {
-      const lm = lms[i];
+      const lm = slots[i];
       const h = H[i];
-      if (!lm) { h.seen = false; h.pinch = false; continue; }
+      if (!lm) { if (h.seen) { h.fx.reset(); h.fy.reset(); } h.seen = false; h.pinch = false; continue; }
       const tip = lm[8], thumb = lm[4], wrist = lm[0], mcp = lm[9];
-      const nx = 1 - 2 * tip.x, ny = 1 - 2 * tip.y;    // mirror + to NDC
-      const a = 0.5;                                   // EMA smoothing
-      h.x = h.seen ? h.x + (nx - h.x) * a : nx;
-      h.y = h.seen ? h.y + (ny - h.y) * a : ny;
+      h.wx = wrist.x; h.wy = wrist.y;                  // for identity matching next frame
+      // pinch point = thumb–index midpoint (steadier than the fingertip alone)
+      const px = (tip.x + thumb.x) / 2, py = (tip.y + thumb.y) / 2;
+      const nx = 1 - 2 * px, ny = 1 - 2 * py;          // mirror + to NDC
+      h.x = h.fx(nx, now); h.y = h.fy(ny, now);        // One-Euro adaptive smoothing
       h.seen = true;
       const span = Math.hypot(wrist.x - mcp.x, wrist.y - mcp.y) || 1e-3;
       const ratio = Math.hypot(thumb.x - tip.x, thumb.y - tip.y) / span;
