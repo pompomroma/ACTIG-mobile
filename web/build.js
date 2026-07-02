@@ -68,25 +68,31 @@ window.addEventListener("load",function(){setTimeout(send,900);});setTimeout(sen
 export function createBuilder(deps) {
   let last = null;               // { files, previewUrl, blobUrls }
 
-  /* ---- generation pipeline: plan → best-of-N → run-eval → self-repair ---- */
-  async function generate(spec, { onStatus, atts = [] } = {}) {
+  /* ---- generation pipeline: plan → best-of-N → run-eval → self-repair ----
+     Checkpoints after every stage to deps.store.buildWip so a build interrupted by
+     the OS suspending the app (backgrounding) resumes from where it stopped. */
+  async function generate(spec, { onStatus, atts = [], resume = null } = {}) {
     revokeLast();
     const tier = TIERS[deps.store.quality] || TIERS.max;
-    const ref = attachmentContext(atts);
+    const ref = resume ? (resume.ref || "") : attachmentContext(atts);
+    let checklist = resume ? (resume.checklist || []) : [];
+    let best = resume ? (resume.best || null) : null;
+    let candStart = resume ? (resume.candidatesDone || 0) : 0;
+    let repStart = resume ? (resume.repairsDone || 0) : 0;
+    const save = (extra) => { try { deps.store.buildWip = { spec, ref, checklist, best, candidatesDone: candStart, repairsDone: repStart, ts: Date.now(), ...extra }; } catch {} };
 
     // 1) Plan an acceptance checklist (steers generation + drives the eval score).
-    let checklist = [];
-    if (tier.plan) {
+    if (tier.plan && !checklist.length && candStart === 0) {
       onStatus?.("Planning…");
       try { checklist = await planChecklist(spec, ref); } catch {}
+      save({});
     }
     const user = `Build this program:\n${spec}${ref}`
       + (checklist.length ? `\n\nIt MUST satisfy every item on this checklist:\n- ${checklist.join("\n- ")}` : "")
       + `\n\nRemember: index.html entry point, self-contained, runs in the browser.`;
 
     // 2) Generate candidate(s), evaluate each, keep the best.
-    let best = null;
-    for (let c = 0; c < tier.candidates; c++) {
+    for (let c = candStart; c < tier.candidates; c++) {
       onStatus?.(tier.candidates > 1 ? `Generating candidate ${c + 1}/${tier.candidates}…` : "Generating…");
       let raw;
       try {
@@ -94,38 +100,44 @@ export function createBuilder(deps) {
           onToken: (_d, full) => onStatus?.(`Generating… ${full.length.toLocaleString()} chars`),
           maxTokens: tier.tokens || 8000, temperature: c === 0 ? 0.2 : 0.5,
         });
-      } catch (e) { if (!best) throw e; else continue; }
+      } catch (e) { if (!best) throw e; else break; }
       const files = parseFiles(raw);
-      if (!files["index.html"]) continue;
-      onStatus?.("Testing candidate…");
-      const evalRes = await evaluate(files, checklist);
-      renderMetrics(evalRes, `Candidate ${c + 1}`);
-      if (!best || evalRes.score > best.eval.score) best = { files, eval: evalRes };
-      if (best.eval.score >= 100) break;
+      candStart = c + 1;
+      if (files["index.html"]) {
+        onStatus?.("Testing candidate…");
+        const evalRes = await evaluate(files, checklist);
+        renderMetrics(evalRes, `Candidate ${c + 1}`);
+        if (!best || evalRes.score > best.eval.score) best = { files, eval: evalRes };
+      }
+      save({ candidatesDone: candStart, repairsDone: 0 });
+      if (best && best.eval.score >= 100) break;
     }
     if (!best) throw new Error("the model did not return a usable index.html — try again or rephrase");
 
     // 3) Self-critique + auto-repair loop until the score plateaus / is perfect.
-    for (let i = 0; i < tier.repairs && best.eval.score < 100; i++) {
+    for (let i = repStart; i < tier.repairs && best.eval.score < 100; i++) {
       onStatus?.(`Repairing (pass ${i + 1}/${tier.repairs})…`);
       let repaired;
       try { repaired = await repairOnce(best.files, best.eval, checklist); }
-      catch { break; }
+      catch { break; }                               // repair failed → keep the best we have
       const files = parseFiles(repaired);
-      if (!files["index.html"]) break;
-      const evalRes = await evaluate(files, checklist);
-      const prev = best.eval.score;
-      renderMetrics(evalRes, `Repair ${i + 1}: ${prev} → ${evalRes.score}`);
-      if (evalRes.score > best.eval.score) best = { files, eval: evalRes };
-      else break;                                    // no improvement → stop
+      repStart = i + 1;
+      if (files["index.html"]) {
+        const evalRes = await evaluate(files, checklist);
+        const prev = best.eval.score;
+        renderMetrics(evalRes, `Repair ${i + 1}: ${prev} → ${evalRes.score}`);
+        if (evalRes.score > best.eval.score) { best = { files, eval: evalRes }; save({ candidatesDone: tier.candidates, repairsDone: repStart }); }
+        else { save({ candidatesDone: tier.candidates, repairsDone: repStart }); break; } // no improvement → stop
+      } else { break; }
     }
 
-    // 4) Finalize the best result.
+    // 4) Finalize the best result and clear the checkpoint.
     onStatus?.("Assembling…");
     const { previewUrl, blobUrls } = assemblePreview(best.files);
     last = { files: best.files, previewUrl, blobUrls, eval: best.eval };
     render(best.files, previewUrl);
     renderMetrics(best.eval, "Final");
+    deps.store.buildWip = null;
     onStatus?.(`Build finished ✓ (quality ${best.eval.score}/100)`);
     return { files: best.files, previewUrl, entry: "index.html", metrics: best.eval };
   }

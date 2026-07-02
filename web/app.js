@@ -34,6 +34,9 @@ const store = {
   set ghToken(v) { localStorage.setItem("actig.ghToken", (v || "").trim()); },
   get quality() { return (localStorage.getItem("actig.quality") || "max").trim(); },  // fast|high|max
   set quality(v) { localStorage.setItem("actig.quality", (v || "max").trim()); },
+  // In-progress build checkpoint so a suspended/reloaded build can resume.
+  get buildWip() { try { return JSON.parse(localStorage.getItem("actig.buildWip") || "null"); } catch { return null; } },
+  set buildWip(v) { if (v) { try { localStorage.setItem("actig.buildWip", JSON.stringify(v)); } catch {} } else localStorage.removeItem("actig.buildWip"); },
   get history() { try { return JSON.parse(localStorage.getItem("actig.history") || "[]"); } catch { return []; } },
   set history(v) { localStorage.setItem("actig.history", JSON.stringify(v.slice(-400))); },
 };
@@ -762,26 +765,53 @@ async function ensureBuild() {
   return builder;
 }
 
-/* Generate a program from a spec, then auto-deliver the testable link(s). */
-async function runBuild(spec, source, lang, atts) {
+/* Build lifecycle + resilience. iOS suspends backgrounded web apps, so we can't
+   truly keep computing in another app — instead we checkpoint progress (in
+   build.js) and AUTO-RESUME the moment ACTIG is foregrounded again, and hold a
+   screen wake-lock so a build isn't killed by the screen sleeping. */
+let building = false, wakeLock = null;
+async function acquireWakeLock() {
+  try { if ("wakeLock" in navigator && document.visibilityState === "visible") wakeLock = await navigator.wakeLock.request("screen"); } catch {}
+}
+function releaseWakeLock() { try { wakeLock && wakeLock.release(); } catch {} wakeLock = null; }
+
+/* Generate a program from a spec, then auto-deliver the testable link(s).
+   `resume` (a saved checkpoint) continues an interrupted build. */
+async function runBuild(spec, source, lang, atts, resume) {
+  if (building) { addBubble("sys", "A build is already running — one at a time."); return; }
   atts = atts || takeAttachments();
+  building = true;
+  acquireWakeLock();
   switchTab("build");
   try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); } catch {}
   const b = await ensureBuild().catch(() => null);
-  if (!b) { addBubble("sys", "Build engine failed to load (needs a network connection)."); return; }
-  addBubble("ai", "On it — generating your program. This can take up to a minute…");
-  if (source === "voice") speak("On it. Generating your program now, sir.", "en-US");
+  if (!b) { building = false; releaseWakeLock(); addBubble("sys", "Build engine failed to load (needs a network connection)."); return; }
+  if (!resume) {
+    addBubble("ai", "On it — generating your program. It keeps going and auto-resumes if you leave and come back.");
+    if (source === "voice") speak("On it. Generating your program now, sir.", "en-US");
+  }
   setStatus("Building…");
   $("buildStatus").textContent = "Building…";
   try {
-    const res = await b.generate(spec, { atts, onStatus: (s) => { setStatus(s); $("buildStatus").textContent = s; } });
+    const res = await b.generate(spec, { atts, resume, onStatus: (s) => { setStatus(s); $("buildStatus").textContent = s; } });
     notifyBuildDone(res, source);
   } catch (e) {
-    setStatus("Build failed");
-    $("buildStatus").textContent = "Build failed: " + shortErr(e);
-    addBubble("sys", "Build failed: " + shortErr(e));
-    if (source === "voice") speak("Sorry, the build failed.", "en-US");
+    setStatus("Build paused");
+    $("buildStatus").textContent = "Paused: " + shortErr(e) + " — will resume when you return.";
+    // Keep the checkpoint so it resumes on foreground; only surface a note.
+    addBubble("sys", "Build interrupted (" + shortErr(e) + "). It will auto-resume when ACTIG is back in the foreground, or tap Generate to continue.");
+  } finally {
+    building = false;
+    releaseWakeLock();
   }
+}
+
+/* Continue an interrupted build from its saved checkpoint. */
+async function resumeBuild() {
+  const wip = store.buildWip;
+  if (!wip || building) return;
+  addBubble("ai", `Resuming your build: “${(wip.spec || "").slice(0, 80)}”…`);
+  await runBuild(wip.spec, "text", "en-US", [], wip);
 }
 
 /* Announce completion three ways: a chat bubble with the link, spoken TTS, and a
@@ -860,5 +890,15 @@ function boot() {
 
   setStatus('Tap 🎤 to turn on the mic');
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+
+  // Resilience for backgrounding: re-acquire the wake-lock and auto-resume an
+  // interrupted build whenever ACTIG returns to the foreground.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    if (building && !wakeLock) acquireWakeLock();
+    if (!building && store.buildWip) resumeBuild();
+  });
+  // If a build was in progress when the app was last closed, pick it back up.
+  if (store.buildWip) setTimeout(resumeBuild, 600);
 }
 document.addEventListener("DOMContentLoaded", boot);

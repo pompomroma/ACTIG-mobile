@@ -80,7 +80,13 @@ ACTIG generates a complete, self-contained client-side web program, runs it in a
 live in-browser preview, and gives you an **Open** link + a **ZIP** of the source
 (3D emitted as text glTF/OBJ). It auto-announces "build finished" via chat, voice,
 and a notification. It uses the configured brain — NVIDIA Nemotron if you set a
-key + the proxy (`web/proxy/`), otherwise the free brain.
+key + the proxy (`web/proxy/`), otherwise the free brain. Builds are
+**checkpointed and auto-resume**: iOS freezes a backgrounded web app, so a build
+can't keep computing while you're in another app, but ACTIG saves progress after
+every stage and picks up where it left off the moment you return — and holds a
+screen wake-lock so a build isn't killed by the screen sleeping. (True
+keep-running-in-the-background needs a server; the `web/proxy/` worker is where
+that would live.)
 
 **Quality pipeline (no extra cost, same model).** Higher output quality comes from
 *inference-time* technique, not from changing the model or paying: Vibe Build can
