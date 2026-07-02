@@ -113,6 +113,20 @@ select and drag it, and — with Stretch on — pinch-drag (or two-hand spread) 
 it. Games built with Vibe Build are generated as **actually playable** games (real
 game loop, keyboard + touch controls, scoring, win/lose + restart), not screen mockups.
 
+**Gourmet mode 🍽, research, PC, and the JARVIS look.** Tap 🍽 (or say "gourmet
+mode" / any restaurant request) and ACTIG becomes a restaurant concierge: it uses
+your device location (with permission) — or any area you name — pulls **real nearby
+venues from OpenStreetMap**, ranks them against every detail of your request, and
+asks follow-up option chips when it needs more (cuisine, budget, vibe). Research-style
+questions ("research/explain/compare…") route to a free **search-grounded model** for
+web-grounded answers. The UI is refined into a JARVIS-style holographic look (arc-
+reactor ring, scanlines, glass panels, Orbitron/Rajdhani type) and the app is now
+**optimized for PC too**: centered wide layout, hover states, two-column settings,
+"/" focuses the input, Ctrl/Cmd+Enter generates a build. Voice conversation picks the
+most natural TTS voice available and turn-taking is snappier. (As always: model
+benchmark scores and hardware TOPS are fixed properties and are not — cannot be —
+changed by the app; quality gains come from real data, search grounding, and prompts.)
+
 **Quality pipeline (no extra cost, same model).** Higher output quality comes from
 *inference-time* technique, not from changing the model or paying: Vibe Build can
 **plan → generate best-of-N candidates → actually run each in a sandbox →

@@ -34,6 +34,8 @@ const store = {
   set ghToken(v) { localStorage.setItem("actig.ghToken", (v || "").trim()); },
   get quality() { return (localStorage.getItem("actig.quality") || "max").trim(); },  // fast|high|max
   set quality(v) { localStorage.setItem("actig.quality", (v || "max").trim()); },
+  get gourmet() { return localStorage.getItem("actig.gourmet") === "1"; },
+  set gourmet(v) { localStorage.setItem("actig.gourmet", v ? "1" : "0"); },
   // In-progress build checkpoint so a suspended/reloaded build can resume.
   get buildWip() { try { return JSON.parse(localStorage.getItem("actig.buildWip") || "null"); } catch { return null; } },
   set buildWip(v) { if (v) { try { localStorage.setItem("actig.buildWip", JSON.stringify(v)); } catch {} } else localStorage.removeItem("actig.buildWip"); },
@@ -117,6 +119,21 @@ function speak(text, lang) {
   speechSynthesis.cancel();
   speakQueued(text, lang);
 }
+/* Pick the most natural available voice per language (premium/enhanced first). */
+let voiceCache = {};
+function bestVoice(lang) {
+  if (!("speechSynthesis" in window)) return null;
+  if (voiceCache[lang] !== undefined) return voiceCache[lang];
+  const all = speechSynthesis.getVoices() || [];
+  const base = (lang || "en-US").split("-")[0];
+  const cands = all.filter(v => v.lang && v.lang.toLowerCase().startsWith(base));
+  const rank = (v) => (/premium|enhanced|natural|neural|siri/i.test(v.name) ? 3 : 0)
+    + (v.lang.toLowerCase() === (lang || "").toLowerCase() ? 2 : 0) + (v.localService ? 1 : 0);
+  cands.sort((a, b) => rank(b) - rank(a));
+  return (voiceCache[lang] = cands[0] || null);
+}
+if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => { voiceCache = {}; };
+
 /* Enqueue a chunk without cancelling what's already queued — lets us start
    talking on the first finished sentence while the rest still streams in. */
 function speakQueued(text, lang) {
@@ -125,6 +142,8 @@ function speakQueued(text, lang) {
   if (!t) return;
   const u = new SpeechSynthesisUtterance(t);
   u.lang = lang || "en-US";
+  const v = bestVoice(u.lang); if (v) u.voice = v;
+  u.rate = 1.04;                                   // brisk, conversational pace
   u.onstart = () => { speaking = true; };
   u.onend = () => { speaking = false; };
   speechSynthesis.speak(u);
@@ -195,7 +214,7 @@ function micLevel(an) {
    speaker has talked and then gone quiet for `silenceMs`. Resolves true if speech
    was heard (worth transcribing), false if the window passed in silence.
    Falls back to a fixed window when no analyser is available. */
-function recordWithVAD(rec, an, { silenceMs = 1000, preSpeechMs = 6000, maxMs = 15000, speechRms = 0.03, silenceRms = 0.02 } = {}) {
+function recordWithVAD(rec, an, { silenceMs = 800, preSpeechMs = 5000, maxMs = 15000, speechRms = 0.03, silenceRms = 0.02 } = {}) {
   if (!an) { setTimeout(() => { try { rec.stop(); } catch {} }, awake ? 7000 : 4000); return Promise.resolve(true); }
   return new Promise((resolve) => {
     const start = performance.now();
@@ -318,7 +337,7 @@ async function listenLoop(stream) {
   try { sp = await speech(); }
   catch (e) { stopMic("Voice unavailable"); addBubble("sys", "Couldn't load the speech model: " + (e?.message || e)); return; }
   while (micOn && !listenAbort) {
-    if (speaking) { await delay(150); continue; }   // wait while ACTIG is speaking (no self-record)
+    if (speaking) { await delay(80); continue; }    // wait while ACTIG is speaking (no self-record)
     let text = "";
     try {
       recording = sp.recordStream(stream, { maxMs: 16000, keepAlive: true, onStatus: setStatus });
@@ -593,6 +612,112 @@ async function pollinationsGenerate(system, user, model, onToken) {
   throw lastErr || new Error("no response");
 }
 
+/* ---------- research mode ----------
+   Research-style questions are routed to the free SEARCH-GROUNDED model
+   ("searchgpt" on the keyless default) with a structured research prompt —
+   real web-grounded answers instead of memory-only ones. */
+const RESEARCH_RE = /\b(research|investigate|deep ?dive|explain|compare|versus|vs\.?|history of|science of|analy[sz]e|why (is|are|do|does|did)|how (does|do|did|is|are)|what (is|are|was|were) the|latest|current|news about|stat(istic)?s|prove|evidence|difference between)\b/i;
+function researchPrompt(lang) {
+  return `You are ACTIG's research engine. Give an accurate, well-structured answer in ${lang}: lead with the direct answer, then key facts with concrete numbers/dates, note significant disagreement or uncertainty, and name your sources (publication/site names) at the end. Be thorough but tight — no filler.`;
+}
+async function researchLLM(history, lang, onToken) {
+  const recent = history.filter(m => m.role !== "sys").slice(-4)
+    .map(m => (m.role === "user" ? "User: " : "ACTIG: ") + m.text).join("\n");
+  return pollinationsGenerate(researchPrompt(lang), recent.slice(-2200), "searchgpt", onToken);
+}
+
+/* ---------- gourmet mode 🍽 ----------
+   Finds the best-matching real restaurants near the user (geolocation) or near a
+   named area, using free OSM services (Nominatim geocoding + Overpass POIs), then
+   ranks them against every detail of the request. Asks follow-up options when the
+   request is ambiguous (via the <<OPTIONS>> chips). */
+const GOURMET_TOGGLE_RE = /\bgourmet mode\b/i;
+const GOURMET_REQ_RE = /\b(restaurant|places? to eat|somewhere to eat|dinner|lunch spot|brunch|food (spot|place)|eatery|bistro|izakaya|sushi place|steakhouse|michelin|맛집|식당|レストラン|餐厅|餐廳)\b/i;
+
+function extractArea(text) {
+  const m = text.match(/\b(?:in|near|at|around)\s+([\p{L}][\p{L}\d\s.,'-]{2,40}?)(?=[.,!?]|$| for | with | that | tonight| today| tomorrow)/iu);
+  const area = m ? m[1].trim() : "";
+  return /^(me|here|my area|the area|town|the city)$/i.test(area) ? "" : area;
+}
+const geoPosition = () => new Promise((res, rej) => {
+  if (!navigator.geolocation) return rej(new Error("no geolocation"));
+  navigator.geolocation.getCurrentPosition(p => res(p.coords), e => rej(e), { timeout: 9000, maximumAge: 120000 });
+});
+async function geocodeArea(area) {
+  const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(area)}`);
+  const j = await r.json();
+  if (!j[0]) throw new Error("area not found");
+  return { lat: +j[0].lat, lon: +j[0].lon, label: j[0].display_name.split(",").slice(0, 2).join(",") };
+}
+async function reverseGeocode(lat, lon) {
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=14`);
+    const j = await r.json();
+    return (j.display_name || "").split(",").slice(0, 2).join(",") || "your area";
+  } catch { return "your area"; }
+}
+async function nearbyRestaurants(lat, lon, radius = 1600) {
+  const q = `[out:json][timeout:12];(node["amenity"~"restaurant|cafe|fast_food"](around:${radius},${lat},${lon});way["amenity"~"restaurant|cafe|fast_food"](around:${radius},${lat},${lon}););out center tags 60;`;
+  const r = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", headers: { "content-type": "text/plain" }, body: q });
+  const j = await r.json();
+  const seen = new Set(), out = [];
+  for (const el of j.elements || []) {
+    const t = el.tags || {};
+    if (!t.name || seen.has(t.name)) continue;
+    seen.add(t.name);
+    out.push(`${t.name}${t.cuisine ? " — " + t.cuisine.replace(/_/g, " ") : ""}${t["addr:street"] ? " (" + (t["addr:housenumber"] ? t["addr:housenumber"] + " " : "") + t["addr:street"] + ")" : ""}${t.amenity === "restaurant" ? "" : " [" + t.amenity + "]"}`);
+    if (out.length >= 40) break;
+  }
+  return out;
+}
+function gourmetPrompt(lang, areaLabel, list) {
+  return `You are ACTIG in GOURMET MODE — an elite restaurant concierge. Reply in ${lang}. The user is near: ${areaLabel}.`
+    + (list.length ? `\nREAL nearby places (name — cuisine (address)):\n- ${list.join("\n- ")}\nRecommend the 2–4 that best satisfy EVERY detail of the request, in ranked order, each with a one-line reason tied to the user's requirements. Prefer this real list; note it's from OpenStreetMap so hours/quality should be double-checked.`
+    : `\nNo live venue list is available — use your knowledge of ${areaLabel} and clearly say the picks should be verified.`)
+    + `\nIf the request is missing key details (cuisine, budget, vibe, party size, distance), ask ONE short follow-up and offer choices via:\n<<OPTIONS>>\n- choice\nAlways keep prose brief and spoken-friendly.`;
+}
+async function runGourmet(text, lang, source) {
+  setStatus("Gourmet: locating…");
+  let lat, lon, label = "";
+  const area = extractArea(text);
+  try {
+    if (area) ({ lat, lon, label } = await geocodeArea(area));
+    else { const c = await geoPosition(); lat = c.latitude; lon = c.longitude; label = await reverseGeocode(lat, lon); }
+  } catch {}
+  let list = [];
+  if (lat !== undefined) {
+    setStatus("Gourmet: scanning nearby places…");
+    try { list = await nearbyRestaurants(lat, lon); } catch {}
+  }
+  if (!label) label = area || "the user's area (location unavailable — ask them where they are)";
+  const bubble = addBubble("ai", "");
+  if (source === "voice" && "speechSynthesis" in window) speechSynthesis.cancel();
+  let spoken = 0;
+  const onToken = (_d, full) => {
+    const shown = parseStructured(full).text;
+    setBubbleText(bubble, shown);
+    setStatus("Gourmet: matching…");
+    if (source === "voice") {
+      const pending = shown.slice(spoken); const end = lastSentenceEnd(pending);
+      if (end > 0) { speakQueued(pending.slice(0, end), lang); spoken += end; }
+    }
+  };
+  let raw;
+  try { raw = await pollinationsGenerate(gourmetPrompt(lang, label, list), "Request: " + text, "searchgpt", onToken); }
+  catch { try { raw = await pollinationsGenerate(gourmetPrompt(lang, label, list), "Request: " + text, store.model, onToken); } catch (e) { raw = "⚠️ Gourmet search failed (" + shortErr(e) + "). Try again, or name an area."; } }
+  const { text: reply, options, suggestions } = parseStructured(raw);
+  setBubbleText(bubble, reply);
+  decorateBubble(bubble, options, suggestions);
+  messages.push({ role: "assistant", text: reply, options, suggestions }); persist();
+  setStatus("Gourmet mode 🍽");
+  if (source === "voice") { const rest = reply.slice(spoken).trim(); if (rest) speakQueued(rest, lang); }
+}
+function setGourmet(on) {
+  store.gourmet = on;
+  const b = $("gourmetBtn"); if (b) b.classList.toggle("on", on);
+  setStatus(on ? "Gourmet mode 🍽 — tell me what you're craving" : "Ready");
+}
+
 /* Turn an HTTP failure into a clear, actionable line instead of a vague "offline". */
 function httpErrorMessage(status, body, lang) {
   if (status === 401 || status === 403)
@@ -648,6 +773,18 @@ async function submit(text, source, atts) {
   if (/(mute).*(me|mic)|음소거/.test(low)) { setUserMuted(true); return finish("Your mic is muted.", lang, source); }
   if (/(be quiet|mute (yourself|ai)|stop talking|조용히)/.test(low)) { setAIMuted(true); return finish("Voice muted.", lang, source); }
 
+  // Gourmet mode 🍽 — toggle by command; handle food requests with real local data.
+  if (GOURMET_TOGGLE_RE.test(low)) {
+    const off = /\b(off|end|exit|stop|disable)\b/.test(low);
+    setGourmet(!off);
+    return finish(off ? "Gourmet mode off." : "Gourmet mode on, sir. Tell me the cuisine, budget, vibe — every detail helps.", lang, source);
+  }
+  if (store.gourmet || GOURMET_REQ_RE.test(low)) {
+    if (!store.gourmet) setGourmet(true);           // a food request auto-activates gourmet mode
+    runGourmet(text, lang, source);
+    return;
+  }
+
   // Vibe Build — "build/make/create/generate a … app/website/game/3D/program".
   if (/\b(build|make|create|generate|develop|code)\b[\s\S]*\b(app|application|web ?app|web ?site|website|web ?page|page|site|game|program|tool|dashboard|landing|clone|3d|three ?d|model|viewer|simulation|visuali[sz]er)\b/.test(low)
       || /^\s*vibe ?code\b/.test(low)) {
@@ -685,6 +822,11 @@ async function submit(text, source, atts) {
   if (images.length) {                              // vision: send image(s) via a multimodal POST
     try { raw = await callLLMVision(messages, images, lang, onToken); }
     catch { raw = await callLLM(messages, lang, onToken); } // provider has no vision/CORS → text only
+  } else if (RESEARCH_RE.test(low) && KEYLESS.test(store.endpoint) && !store.offline) {
+    // research question → search-grounded model, fall back to the normal brain
+    setStatus("Researching…");
+    try { raw = await researchLLM(messages, lang, onToken); }
+    catch { raw = await callLLM(messages, lang, onToken); }
   } else {
     raw = await callLLM(messages, lang, onToken);
   }
@@ -944,7 +1086,16 @@ function boot() {
   $("emergency").onclick = wake;
   $("micUser").onclick = toggleMic;            // one tap turns the mic on/off
   $("micAI").onclick = () => setAIMuted(!aiMuted);
+  $("gourmetBtn").onclick = () => setGourmet(!store.gourmet);
+  $("gourmetBtn").classList.toggle("on", store.gourmet);
   $("open3d").onclick = () => switchTab("studio");
+  // desktop hotkeys: "/" focuses the message box; Ctrl/Cmd+Enter generates a build
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
+      e.preventDefault(); switchTab("chat"); $("draft").focus();
+    }
+  });
+  $("buildSpec").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") $("buildGo").click(); });
   // tabs
   document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => switchTab(b.dataset.tab));
   // studio buttons
