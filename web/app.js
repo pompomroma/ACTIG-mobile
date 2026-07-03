@@ -36,6 +36,8 @@ const store = {
   set quality(v) { localStorage.setItem("actig.quality", (v || "max").trim()); },
   get gourmet() { return localStorage.getItem("actig.gourmet") === "1"; },
   set gourmet(v) { localStorage.setItem("actig.gourmet", v ? "1" : "0"); },
+  get overdrive() { return localStorage.getItem("actig.overdrive") === "1"; },
+  set overdrive(v) { localStorage.setItem("actig.overdrive", v ? "1" : "0"); },
   // In-progress build checkpoint so a suspended/reloaded build can resume.
   get buildWip() { try { return JSON.parse(localStorage.getItem("actig.buildWip") || "null"); } catch { return null; } },
   set buildWip(v) { if (v) { try { localStorage.setItem("actig.buildWip", JSON.stringify(v)); } catch {} } else localStorage.removeItem("actig.buildWip"); },
@@ -746,6 +748,15 @@ function setGourmet(on) {
   setStatus(on ? "Gourmet mode 🍽 — tell me what you're craving" : "Ready");
 }
 
+/* Overdrive 🚀 — runs the deepest vibe-coding pipeline (architecture pass,
+   best-of-4, 6 repairs, post-edit verification). Same free model, just slower. */
+const OVERDRIVE_RE = /\b(overdrive( mode)?|maximum (effort|power|quality))\b/i;
+function setOverdrive(on) {
+  store.overdrive = on;
+  const b = $("overdriveBtn"); if (b) b.classList.toggle("on", on);
+  setStatus(on ? "Overdrive 🚀 — builds run the deepest pipeline (slower, best results)" : "Overdrive off");
+}
+
 /* Turn an HTTP failure into a clear, actionable line instead of a vague "offline". */
 function httpErrorMessage(status, body, lang) {
   if (status === 401 || status === 403)
@@ -800,6 +811,14 @@ async function submit(text, source, atts) {
   }
   if (/(mute).*(me|mic)|음소거/.test(low)) { setUserMuted(true); return finish("Your mic is muted.", lang, source); }
   if (/(be quiet|mute (yourself|ai)|stop talking|조용히)/.test(low)) { setAIMuted(true); return finish("Voice muted.", lang, source); }
+
+  // Overdrive 🚀 — toggle the deepest vibe-coding pipeline by command.
+  if (OVERDRIVE_RE.test(low)) {
+    const off = /\b(off|end|exit|stop|disable)\b/.test(low);
+    setOverdrive(!off);
+    return finish(off ? "Overdrive off — back to the standard pipeline."
+      : "Overdrive engaged, sir. Builds and edits now run the deepest pipeline — architecture pass, four candidates, six repair rounds, and change verification. Slower, but the best I can produce.", lang, source);
+  }
 
   // Gourmet mode 🍽 — toggle by command; handle food requests with real local data.
   if (GOURMET_TOGGLE_RE.test(low)) {
@@ -1140,6 +1159,8 @@ function boot() {
   $("buildGo").onclick = () => { const v = $("buildSpec").value.trim(); if (v) { clearBuildEditMode(); runBuild(v, "text", "en-US"); } };
   $("buildApply").onclick = () => { const v = $("buildSpec").value.trim(); const a = takeAttachments(); if (!v && !a.length) { addBubble("sys", "Type the change (and/or attach a reference) first."); return; } $("buildSpec").value = ""; runAdjust(v || "Apply the attached reference(s) to the current program.", "text", a); };
   $("buildNew").onclick = () => { clearBuildEditMode(); setStatus("Ready for a new build"); };
+  $("overdriveBtn").onclick = () => setOverdrive(!store.overdrive);
+  $("overdriveBtn").classList.toggle("on", store.overdrive);
   $("buildSave").onclick = async () => {
     const b = await ensureBuild().catch(() => null);
     if (!b || !b.hasProgram()) { addBubble("sys", "Generate or open a program first."); return; }

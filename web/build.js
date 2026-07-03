@@ -58,6 +58,9 @@ const TIERS = {
   fast: { candidates: 1, plan: false, repairs: 0, tokens: 8000 },
   high: { candidates: 1, plan: true, repairs: 1, tokens: 9000 },
   max: { candidates: 3, plan: true, repairs: 4, tokens: 12000 },   // pushed to the practical ceiling
+  // OVERDRIVE 🚀: beyond Max — adds an architecture pass, best-of-4, 6 repairs,
+  // and post-edit verification. Same free model; it just works much harder.
+  overdrive: { candidates: 4, plan: true, arch: true, repairs: 6, tokens: 12000, verifyEdits: true, label: "OVERDRIVE" },
 };
 
 // Common words ignored when heuristically matching checklist items to code.
@@ -115,6 +118,9 @@ async function idbDel(id) {
 }
 
 export function createBuilder(deps) {
+  // Overdrive (store.overdrive) overrides the quality select with the deepest tier.
+  const activeTier = () => (deps.store.overdrive ? TIERS.overdrive : (TIERS[deps.store.quality] || TIERS.max));
+  const tierTag = (t, label) => (t.label ? `${t.label} · ${label}` : label);
   let last = null;               // { files, previewUrl, blobUrls, eval }
   let lastSpec = "";             // the spec/description behind `last`
   let currentId = null, currentName = "", currentCreatedAt = null; // saved-library link
@@ -125,13 +131,14 @@ export function createBuilder(deps) {
   async function generate(spec, { onStatus, atts = [], resume = null } = {}) {
     revokeLast();
     currentId = null; currentName = ""; currentCreatedAt = null; lastSpec = spec; // a fresh build is a new, unsaved program
-    const tier = TIERS[deps.store.quality] || TIERS.max;
+    const tier = activeTier();
     const ref = resume ? (resume.ref || "") : await analyzeContext(atts, onStatus);
     let checklist = resume ? (resume.checklist || []) : [];
+    let arch = resume ? (resume.arch || "") : "";
     let best = resume ? (resume.best || null) : null;
     let candStart = resume ? (resume.candidatesDone || 0) : 0;
     let repStart = resume ? (resume.repairsDone || 0) : 0;
-    const save = (extra) => { try { deps.store.buildWip = { spec, ref, checklist, best, candidatesDone: candStart, repairsDone: repStart, ts: Date.now(), ...extra }; } catch {} };
+    const save = (extra) => { try { deps.store.buildWip = { spec, ref, checklist, arch, best, candidatesDone: candStart, repairsDone: repStart, ts: Date.now(), ...extra }; } catch {} };
 
     // 1) Plan an acceptance checklist (steers generation + drives the eval score).
     if (tier.plan && !checklist.length && candStart === 0) {
@@ -139,9 +146,16 @@ export function createBuilder(deps) {
       try { checklist = await planChecklist(spec, ref); } catch {}
       save({});
     }
+    // 1b) OVERDRIVE: architecture pass — decide the technical design up front.
+    if (tier.arch && !arch && candStart === 0) {
+      onStatus?.(tierTag(tier, "Architecture pass…"));
+      try { arch = await planArchitecture(spec, ref, checklist); } catch {}
+      save({});
+    }
     const isGame = GAME_RE.test(spec + " " + checklist.join(" "));
     const user = `Build this program:\n${spec}${ref}`
       + (checklist.length ? `\n\nIt MUST satisfy every item on this checklist:\n- ${checklist.join("\n- ")}` : "")
+      + (arch ? `\n\nFollow this technical design (deviate only if it's clearly wrong):\n${arch}` : "")
       + (isGame ? GAME_REQ : "")
       + `\n\nRemember: index.html entry point, self-contained, runs in the browser.`;
 
@@ -160,7 +174,7 @@ export function createBuilder(deps) {
       if (files["index.html"]) {
         onStatus?.("Testing candidate…");
         const evalRes = await evaluate(files, checklist, isGame);
-        renderMetrics(evalRes, `Candidate ${c + 1}`);
+        renderMetrics(evalRes, tierTag(tier, `Candidate ${c + 1}`));
         if (!best || evalRes.score > best.eval.score) best = { files, eval: evalRes };
       }
       save({ candidatesDone: candStart, repairsDone: 0 });
@@ -179,7 +193,7 @@ export function createBuilder(deps) {
       if (files["index.html"]) {
         const evalRes = await evaluate(files, checklist, isGame);
         const prev = best.eval.score;
-        renderMetrics(evalRes, `Repair ${i + 1}: ${prev} → ${evalRes.score}`);
+        renderMetrics(evalRes, tierTag(tier, `Repair ${i + 1}: ${prev} → ${evalRes.score}`));
         if (evalRes.score > best.eval.score) { best = { files, eval: evalRes }; save({ candidatesDone: tier.candidates, repairsDone: repStart }); }
         else { save({ candidatesDone: tier.candidates, repairsDone: repStart }); break; } // no improvement → stop
       } else { break; }
@@ -190,7 +204,7 @@ export function createBuilder(deps) {
     const { previewUrl, blobUrls } = assemblePreview(best.files);
     last = { files: best.files, previewUrl, blobUrls, eval: best.eval };
     render(best.files, previewUrl);
-    renderMetrics(best.eval, "Final");
+    renderMetrics(best.eval, tierTag(tier, "Final"));
     deps.store.buildWip = null;
     onStatus?.(`Build finished ✓ (quality ${best.eval.score}/100)`);
     return { files: best.files, previewUrl, entry: "index.html", metrics: best.eval };
@@ -237,6 +251,15 @@ export function createBuilder(deps) {
     return String(out || "").split("\n").map(s => s.replace(/^[\s\-*\d.)]+/, "").trim()).filter(Boolean).slice(0, 8);
   }
 
+  /* OVERDRIVE: one extra call that decides the technical design before any code
+     is written — sharper planning/structure than generating cold. */
+  async function planArchitecture(spec, ref, checklist) {
+    const sys = "You are a principal web engineer. Produce a SHORT technical design for a browser-only, single-page web app: components/modules, state model (shape of the data), core algorithms, key edge cases to handle, and the 2–3 riskiest parts with how to de-risk them. Max ~15 lines, telegraphic style, no code, no prose padding.";
+    const user = `Request:\n${spec}${ref}` + (checklist.length ? `\nAcceptance checklist:\n- ${checklist.join("\n- ")}` : "");
+    const out = await deps.llmGenerate(sys, user, { maxTokens: 600, temperature: 0.2 });
+    return String(out || "").trim().slice(0, 2400);
+  }
+
   /* Send current files + concrete defects back for a full corrected rewrite. */
   async function repairOnce(files, evalRes, checklist) {
     const filesBlock = Object.entries(files).map(([p, c]) => `===FILE: ${p}===\n${c}`).join("\n");
@@ -246,7 +269,7 @@ export function createBuilder(deps) {
     if (failed.length) defects.push("Failed checks: " + failed.join("; "));
     if (checklist.length) defects.push("Acceptance checklist:\n- " + checklist.join("\n- "));
     const user = `Current program:\n${filesBlock}\n\n${defects.join("\n\n") || "Improve overall quality, robustness and completeness."}\n\nReturn the COMPLETE corrected project.`;
-    const tier = TIERS[deps.store.quality] || TIERS.max;
+    const tier = activeTier();
     return deps.llmGenerate(REVIEWER, user, {
       maxTokens: tier.tokens || 8000, temperature: 0.2,
     });
@@ -453,7 +476,7 @@ export function createBuilder(deps) {
   /* ---- AI edit: apply a requested change to the loaded program ---- */
   async function applyAdjustment(request, { onStatus, atts = [] } = {}) {
     if (!last) throw new Error("open or generate a program first, then request a change");
-    const tier = TIERS[deps.store.quality] || TIERS.max;
+    const tier = activeTier();
     const ctx = atts.length ? await analyzeContext(atts, onStatus) : "";
     const isGame = GAME_RE.test(lastSpec + " " + request);
     const filesBlock = Object.entries(last.files).map(([p, c]) => `===FILE: ${p}===\n${c}`).join("\n");
@@ -467,12 +490,30 @@ export function createBuilder(deps) {
     if (!files["index.html"]) throw new Error("the edit didn't return a valid program — try rephrasing");
     onStatus?.("Testing…");
     let evalRes = await evaluate(files, [], isGame);
-    renderMetrics(evalRes, "Edited");
+    renderMetrics(evalRes, tierTag(tier, "Edited"));
+    // OVERDRIVE: verify every requested change actually landed; fix what's missing.
+    if (tier.verifyEdits) {
+      onStatus?.(tierTag(tier, "Verifying the change…"));
+      try {
+        const vSys = "You are a meticulous QA reviewer. Given a requested change and the updated project files, list ONLY the parts of the request that are NOT fully implemented, one per line. If everything is implemented, output exactly: OK";
+        const vUser = `Requested change:\n${request}\n\nUpdated project:\n${Object.entries(files).map(([p, c]) => `===FILE: ${p}===\n${c}`).join("\n")}`;
+        const verdict = (await deps.llmGenerate(vSys, vUser, { maxTokens: 400, temperature: 0 })).trim();
+        if (verdict && !/^ok\b/i.test(verdict)) {
+          onStatus?.(tierTag(tier, "Completing missed parts…"));
+          const fixUser = `Current program:\n${Object.entries(files).map(([p, c]) => `===FILE: ${p}===\n${c}`).join("\n")}\n\nThese requested changes were NOT fully implemented — implement them now, keeping everything else intact:\n${verdict.slice(0, 1200)}\n\nOriginal request:\n${request}\n\nReturn the COMPLETE updated project.`;
+          const f2 = parseFiles(await deps.llmGenerate(EDITOR, fixUser, { maxTokens: tier.tokens || 8000, temperature: 0.2 }));
+          if (f2["index.html"]) {
+            const e2 = await evaluate(f2, [], isGame);
+            if (e2.score >= evalRes.score - 5) { files = f2; evalRes = e2; renderMetrics(evalRes, tierTag(tier, "Edited (verified)")); }
+          }
+        }
+      } catch {}
+    }
     if (tier.repairs > 0 && evalRes.score < 100) {          // one light repair pass for edits
       onStatus?.("Repairing…");
       try {
         const f2 = parseFiles(await repairOnce(files, evalRes, []));
-        if (f2["index.html"]) { const e2 = await evaluate(f2, [], isGame); if (e2.score >= evalRes.score) { files = f2; evalRes = e2; renderMetrics(evalRes, "Edited (repaired)"); } }
+        if (f2["index.html"]) { const e2 = await evaluate(f2, [], isGame); if (e2.score >= evalRes.score) { files = f2; evalRes = e2; renderMetrics(evalRes, tierTag(tier, "Edited (repaired)")); } }
       } catch {}
     }
     revokeLast();

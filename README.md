@@ -138,7 +138,12 @@ self-critique and auto-repair** the code until a live **Evaluation scorecard**
 Pick **Fast / High / Max** in Settings (default **Max** = best-of-3 candidates,
 up to 4 auto-repair passes, larger token budget, and extra eval checks for mobile
 + accessibility); higher tiers just make more calls to the *same free endpoint*
-(slower, still $0). Note: a model's benchmark
+(slower, still $0). **🚀 Overdrive** — toggled by the button in the Build tab or by
+saying/typing "overdrive mode" — goes beyond Max: an **architecture pass** (components,
+state model, algorithms, edge cases decided before any code), best-of-**4** candidates,
+up to **6** repair rounds, and **post-edit verification** that checks every requested
+change actually landed (fixing what didn't). Deepest results, slowest, still the same
+free model. Note: a model's benchmark
 scores and a chip's TOPS are fixed and cannot be changed by the app — this raises
 the *measured quality of the generated result*, which is what the scorecard shows. Add a GitHub token in
 Settings to also **Publish** a public shareable URL (via Gist + gist.githack).
