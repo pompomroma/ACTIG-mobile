@@ -65,7 +65,7 @@ in the Keychain, never in source.
 
 Zero setup, no GitHub settings, **no API key**: open this in **Safari → Share →
 Add to Home Screen** —
-**https://raw.githack.com/pompomroma/ACTIG-mobile/8fd39c963188a859fdf9ac9e9c1b45f2ca0b8b66/web/index.html**
+**https://raw.githack.com/pompomroma/ACTIG-mobile/5eef32c6fe1e29f545b13fda86e0d79a902bfe03/web/index.html**
 (served straight from the repo by a free CDN; the long code is a commit hash, used
 because the working branch name contains slashes that CDNs can't parse). No PC, no Apple account, no
 signing, no key. The AI answers immediately via a free, browser-friendly brain.
