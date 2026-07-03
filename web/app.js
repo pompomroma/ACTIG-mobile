@@ -158,14 +158,34 @@ function lastSentenceEnd(s) {
 }
 /* Fluency chunker: prefer a full sentence; if a long sentence is still being
    generated, speak up to the last clause boundary (comma/dash/colon) so ACTIG
-   starts talking sooner instead of waiting for the period. */
-function speakableChunk(s) {
+   starts talking sooner instead of waiting for the period. The FIRST chunk of a
+   reply uses a lower threshold so speech begins as early as possible. */
+function speakableChunk(s, first) {
   const end = lastSentenceEnd(s);
   if (end > 0) return end;
-  if (s.length < 70) return 0;                     // short → wait for the sentence
+  const min = first ? 40 : 70;                     // reflex: start the reply sooner
+  if (s.length < min) return 0;
   const m = s.match(/^[\s\S]*[,;:、，；：—](?=\s|$)/);
-  return m && m[0].length > 30 ? m[0].length : 0;  // clause must be substantial
+  return m && m[0].length > (first ? 20 : 30) ? m[0].length : 0;
 }
+
+/* ---------- reflex acknowledgments ----------
+   The instant your turn ends, ACTIG says a short natural ack ("On it, sir…")
+   while transcription + the model still work — so there's never dead air. */
+const ACKS = {
+  "en-US": ["On it, sir.", "Right away.", "Let me see…", "Mm-hm, one moment."],
+  "ko-KR": ["네, 바로 볼게요.", "잠시만요.", "알겠어요."],
+  "ja-JP": ["はい、確認します。", "少々お待ちを。", "了解です。"],
+  "zh-CN": ["好的，我看看。", "稍等一下。", "明白。"],
+};
+let ackedThisTurn = false, lastLang = "en-US";
+function reflexAck(lang) {
+  if (aiMuted || !("speechSynthesis" in window)) return;
+  ackedThisTurn = true;
+  const pool = ACKS[lang] || ACKS["en-US"];
+  speakQueued(pool[Math.floor(Math.random() * pool.length)], lang || "en-US");
+}
+function consumeAck() { const v = ackedThisTurn; ackedThisTurn = false; return v; }
 
 /* ---------- speech input ----------
    iOS Safari has no Web Speech *recognition* API, so we record the mic and
@@ -360,6 +380,7 @@ async function listenLoop(stream) {
       recording = null;
       if (!micOn || listenAbort) break;
       if (!heard) continue;                            // window passed in silence — listen again
+      if (awake) reflexAck(lastLang);                  // react INSTANTLY while we transcribe/think
       setStatus("Transcribing…");
       text = await sp.transcribeBlob(blob, "auto", setStatus);
     } catch (e) {
@@ -694,7 +715,9 @@ function gourmetPrompt(lang, areaLabel, list, foodBrief) {
     : `\nNo live venue list is available — use your knowledge of ${areaLabel} and clearly say the picks should be verified.`)
     + `\nIf the request is missing key details (cuisine, budget, vibe, party size, distance), ask ONE short follow-up and offer choices via:\n<<OPTIONS>>\n- choice\nAlways keep prose brief and spoken-friendly.`;
 }
-async function runGourmet(text, lang, source, atts = []) {
+async function runGourmet(text, lang, source, atts = [], acked = false) {
+  // Reflex: react aloud immediately unless the listen loop already did.
+  if (source === "voice" && !acked) { try { speechSynthesis.cancel(); } catch {} reflexAck(lang); consumeAck(); }
   // Analyze attached food photo(s) first — their dish + quality tier steer the search.
   let foodBrief = "";
   const foodImgs = atts.filter(a => a.kind === "image" && a.dataUrl);
@@ -720,14 +743,15 @@ async function runGourmet(text, lang, source, atts = []) {
   }
   if (!label) label = area || "the user's area (location unavailable — ask them where they are)";
   const bubble = addBubble("ai", "");
-  if (source === "voice" && "speechSynthesis" in window) speechSynthesis.cancel();
+  bubble.classList.add("thinking");                 // instant visual reflex
   let spoken = 0;
   const onToken = (_d, full) => {
+    bubble.classList.remove("thinking");
     const shown = parseStructured(full).text;
     setBubbleText(bubble, shown);
     setStatus("Gourmet: matching…");
     if (source === "voice") {
-      const pending = shown.slice(spoken); const end = speakableChunk(pending);
+      const pending = shown.slice(spoken); const end = speakableChunk(pending, spoken === 0);
       if (end > 0) { speakQueued(pending.slice(0, end), lang); spoken += end; }
     }
   };
@@ -736,6 +760,7 @@ async function runGourmet(text, lang, source, atts = []) {
   try { raw = await pollinationsGenerate(sys, "Request: " + fullRequest, "searchgpt", onToken); }
   catch { try { raw = await pollinationsGenerate(sys, "Request: " + fullRequest, store.model, onToken); } catch (e) { raw = "⚠️ Gourmet search failed (" + shortErr(e) + "). Try again, or name an area."; } }
   const { text: reply, options, suggestions } = parseStructured(raw);
+  bubble.classList.remove("thinking");
   setBubbleText(bubble, reply);
   decorateBubble(bubble, options, suggestions);
   messages.push({ role: "assistant", text: reply, options, suggestions }); persist();
@@ -795,6 +820,8 @@ function parseStructured(raw) {
 async function submit(text, source, atts) {
   atts = atts || takeAttachments();               // files attached in the input bar
   const lang = detectLang(text || (atts.length ? "the attached files" : ""));
+  lastLang = lang;                                // remembered for next turn's instant ack
+  const acked = consumeAck();                     // did the listen loop already react aloud?
   const modelText = augmentWithFiles(text, atts); // text-file contents inlined for the model
   addBubble("user", text || "(attached files)", [], [], atts);
   messages.push({ role: "user", text: modelText, display: text, attNames: atts.map(a => a.name) }); persist();
@@ -828,7 +855,7 @@ async function submit(text, source, atts) {
   }
   if (store.gourmet || GOURMET_REQ_RE.test(low)) {
     if (!store.gourmet) setGourmet(true);           // a food request auto-activates gourmet mode
-    runGourmet(text || "Find me a nearby place that serves food like in the attached photo.", lang, source, atts);
+    runGourmet(text || "Find me a nearby place that serves food like in the attached photo.", lang, source, atts, acked);
     return;
   }
 
@@ -852,15 +879,20 @@ async function submit(text, source, atts) {
   // for voice, starts speaking) the moment the first tokens land.
   setStatus("Thinking…");
   const bubble = addBubble("ai", "");
-  if (source === "voice" && "speechSynthesis" in window) speechSynthesis.cancel();
+  bubble.classList.add("thinking");                 // instant visual reflex (animated dots)
+  if (source === "voice") {
+    // Reflex: if the listen loop hasn't already acknowledged aloud, do it now
+    // (don't cancel a just-spoken ack — reply chunks queue behind it naturally).
+    if (!acked && "speechSynthesis" in window) { speechSynthesis.cancel(); reflexAck(lang); consumeAck(); }
+  }
   let spoken = 0, firstToken = true;
   const onToken = (_delta, full) => {
-    if (firstToken) { firstToken = false; setStatus("Replying…"); }
+    if (firstToken) { firstToken = false; bubble.classList.remove("thinking"); setStatus("Replying…"); }
     const shown = parseStructured(full).text;      // hide <<OPTIONS>>/<<SUGGESTIONS>> markers
     setBubbleText(bubble, shown);
     if (source === "voice") {                       // speak completed sentences as they form
       const pending = shown.slice(spoken);
-      const end = speakableChunk(pending);
+      const end = speakableChunk(pending, spoken === 0);
       if (end > 0) { speakQueued(pending.slice(0, end), lang); spoken += end; }
     }
   };
@@ -878,6 +910,7 @@ async function submit(text, source, atts) {
     raw = await callLLM(messages, lang, onToken);
   }
   const { text: reply, options, suggestions } = parseStructured(raw);
+  bubble.classList.remove("thinking");
   setBubbleText(bubble, reply);
   decorateBubble(bubble, options, suggestions);
   messages.push({ role: "assistant", text: reply, options, suggestions }); persist();

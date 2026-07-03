@@ -126,7 +126,10 @@ web-grounded answers. The UI is refined into a JARVIS-style holographic look (ar
 reactor ring, scanlines, glass panels, Orbitron/Rajdhani type) and the app is now
 **optimized for PC too**: centered wide layout, hover states, two-column settings,
 "/" focuses the input, Ctrl/Cmd+Enter generates a build. Voice conversation picks the
-most natural TTS voice available and turn-taking is snappier. (As always: model
+most natural TTS voice available and turn-taking is snappier — and ACTIG has a
+**reflex**: the instant your turn ends it acknowledges aloud ("On it, sir…") while
+it transcribes and thinks, the first spoken chunk starts earlier, and text replies
+show an instant thinking indicator — no dead air, no ability reduced. (As always: model
 benchmark scores and hardware TOPS are fixed properties and are not — cannot be —
 changed by the app; quality gains come from real data, search grounding, and prompts.)
 
