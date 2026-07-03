@@ -117,7 +117,10 @@ game loop, keyboard + touch controls, scoring, win/lose + restart), not screen m
 mode" / any restaurant request) and ACTIG becomes a restaurant concierge: it uses
 your device location (with permission) — or any area you name — pulls **real nearby
 venues from OpenStreetMap**, ranks them against every detail of your request, and
-asks follow-up option chips when it needs more (cuisine, budget, vibe). Research-style
+asks follow-up option chips when it needs more (cuisine, budget, vibe). Attach a
+**food photo** (📎) to a gourmet request and ACTIG analyzes the dish — cuisine,
+ingredients, and plating **quality tier** — and matches nearby venues serving food
+of that type and quality, explaining per pick how it matches your photo. Research-style
 questions ("research/explain/compare…") route to a free **search-grounded model** for
 web-grounded answers. The UI is refined into a JARVIS-style holographic look (arc-
 reactor ring, scanlines, glass panels, Orbitron/Rajdhani type) and the app is now

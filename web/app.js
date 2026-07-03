@@ -681,13 +681,29 @@ async function nearbyRestaurants(lat, lon, radius = 1600) {
   }
   return out;
 }
-function gourmetPrompt(lang, areaLabel, list) {
+/* Culinary vision brief: what dish is in the photo, and at what quality tier —
+   so the concierge can match nearby venues to the SAME food style + quality. */
+const FOOD_PROMPT = `You are a culinary expert. Analyze the food in the attached photo(s) precisely so a restaurant scout can find places serving comparable food. Cover: dish identification (name it), cuisine & region, key ingredients and cooking technique, plating/presentation QUALITY TIER (street-food / casual / bistro / fine-dining), portion style, and any visible quality cues (ingredient grade, freshness, refinement). Output a short structured brief — no fluff.`;
+
+function gourmetPrompt(lang, areaLabel, list, foodBrief) {
   return `You are ACTIG in GOURMET MODE — an elite restaurant concierge. Reply in ${lang}. The user is near: ${areaLabel}.`
+    + (foodBrief ? `\nFOOD REFERENCE ANALYSIS — the user sent photo(s) of food and wants restaurants serving dishes of THIS type and THIS quality tier:\n${foodBrief}\nPrioritize venues whose cuisine matches the reference dish and whose style plausibly matches its quality tier; for EACH pick state in one line how it matches the reference dish/quality, alongside the user's other requirements.` : "")
     + (list.length ? `\nREAL nearby places (name — cuisine (address)):\n- ${list.join("\n- ")}\nRecommend the 2–4 that best satisfy EVERY detail of the request, in ranked order, each with a one-line reason tied to the user's requirements. Prefer this real list; note it's from OpenStreetMap so hours/quality should be double-checked.`
     : `\nNo live venue list is available — use your knowledge of ${areaLabel} and clearly say the picks should be verified.`)
     + `\nIf the request is missing key details (cuisine, budget, vibe, party size, distance), ask ONE short follow-up and offer choices via:\n<<OPTIONS>>\n- choice\nAlways keep prose brief and spoken-friendly.`;
 }
-async function runGourmet(text, lang, source) {
+async function runGourmet(text, lang, source, atts = []) {
+  // Analyze attached food photo(s) first — their dish + quality tier steer the search.
+  let foodBrief = "";
+  const foodImgs = atts.filter(a => a.kind === "image" && a.dataUrl);
+  if (foodImgs.length) {
+    setStatus("Gourmet: analyzing your food photo(s)…");
+    try { foodBrief = (await visionDescribe(foodImgs, FOOD_PROMPT) || "").trim(); } catch {}
+  }
+  // Attached text files (notes, criteria lists) count as extra requirements.
+  const noteTexts = atts.filter(a => a.kind === "text" && a.text).map(a => `${a.name}:\n${a.text.slice(0, 4000)}`);
+  const fullRequest = text + (noteTexts.length ? `\n\nAttached requirement notes:\n${noteTexts.join("\n\n")}` : "");
+
   setStatus("Gourmet: locating…");
   let lat, lon, label = "";
   const area = extractArea(text);
@@ -714,8 +730,9 @@ async function runGourmet(text, lang, source) {
     }
   };
   let raw;
-  try { raw = await pollinationsGenerate(gourmetPrompt(lang, label, list), "Request: " + text, "searchgpt", onToken); }
-  catch { try { raw = await pollinationsGenerate(gourmetPrompt(lang, label, list), "Request: " + text, store.model, onToken); } catch (e) { raw = "⚠️ Gourmet search failed (" + shortErr(e) + "). Try again, or name an area."; } }
+  const sys = gourmetPrompt(lang, label, list, foodBrief);
+  try { raw = await pollinationsGenerate(sys, "Request: " + fullRequest, "searchgpt", onToken); }
+  catch { try { raw = await pollinationsGenerate(sys, "Request: " + fullRequest, store.model, onToken); } catch (e) { raw = "⚠️ Gourmet search failed (" + shortErr(e) + "). Try again, or name an area."; } }
   const { text: reply, options, suggestions } = parseStructured(raw);
   setBubbleText(bubble, reply);
   decorateBubble(bubble, options, suggestions);
@@ -792,7 +809,7 @@ async function submit(text, source, atts) {
   }
   if (store.gourmet || GOURMET_REQ_RE.test(low)) {
     if (!store.gourmet) setGourmet(true);           // a food request auto-activates gourmet mode
-    runGourmet(text, lang, source);
+    runGourmet(text || "Find me a nearby place that serves food like in the attached photo.", lang, source, atts);
     return;
   }
 
