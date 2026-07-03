@@ -88,6 +88,15 @@ export async function startRecording({ maxMs = 8000, onStatus } = {}) {
   return { stop, done };
 }
 
+/* Pre-load the Whisper pipeline (and prime it with a beat of silence) so the
+   FIRST spoken turn doesn't pay the model-load + compile cost. Fire-and-forget. */
+export async function warmup(onStatus) {
+  try {
+    const pipe = await getPipe(onStatus);
+    await pipe(new Float32Array(16000), { chunk_length_s: 30 });   // 1s of silence primes kernels
+  } catch {}
+}
+
 /* Is on-device voice input usable here? (secure context + mic + recorder) */
 export function voiceInputSupported() {
   return !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder && window.isSecureContext);

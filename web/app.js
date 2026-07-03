@@ -154,6 +154,16 @@ function lastSentenceEnd(s) {
   const m = s.match(/^[\s\S]*[.!?。！？\n]/);
   return m ? m[0].length : 0;
 }
+/* Fluency chunker: prefer a full sentence; if a long sentence is still being
+   generated, speak up to the last clause boundary (comma/dash/colon) so ACTIG
+   starts talking sooner instead of waiting for the period. */
+function speakableChunk(s) {
+  const end = lastSentenceEnd(s);
+  if (end > 0) return end;
+  if (s.length < 70) return 0;                     // short → wait for the sentence
+  const m = s.match(/^[\s\S]*[,;:、，；：—](?=\s|$)/);
+  return m && m[0].length > 30 ? m[0].length : 0;  // clause must be substantial
+}
 
 /* ---------- speech input ----------
    iOS Safari has no Web Speech *recognition* API, so we record the mic and
@@ -214,7 +224,7 @@ function micLevel(an) {
    speaker has talked and then gone quiet for `silenceMs`. Resolves true if speech
    was heard (worth transcribing), false if the window passed in silence.
    Falls back to a fixed window when no analyser is available. */
-function recordWithVAD(rec, an, { silenceMs = 800, preSpeechMs = 5000, maxMs = 15000, speechRms = 0.03, silenceRms = 0.02 } = {}) {
+function recordWithVAD(rec, an, { silenceMs = 650, preSpeechMs = 5000, maxMs = 15000, speechRms = 0.03, silenceRms = 0.02 } = {}) {
   if (!an) { setTimeout(() => { try { rec.stop(); } catch {} }, awake ? 7000 : 4000); return Promise.resolve(true); }
   return new Promise((resolve) => {
     const start = performance.now();
@@ -284,6 +294,7 @@ function startMic(stream) {
   } else {
     listenStream = stream;
     analyser = makeAnalyser(stream);            // for silence detection (auto end-of-turn)
+    speech().then(sp => sp.warmup?.()).catch(() => {});  // pre-load Whisper so turn 1 is fast
     listenLoop(stream);                         // iOS: continuous on-device Whisper loop
   }
 }
@@ -698,7 +709,7 @@ async function runGourmet(text, lang, source) {
     setBubbleText(bubble, shown);
     setStatus("Gourmet: matching…");
     if (source === "voice") {
-      const pending = shown.slice(spoken); const end = lastSentenceEnd(pending);
+      const pending = shown.slice(spoken); const end = speakableChunk(pending);
       if (end > 0) { speakQueued(pending.slice(0, end), lang); spoken += end; }
     }
   };
@@ -813,7 +824,7 @@ async function submit(text, source, atts) {
     setBubbleText(bubble, shown);
     if (source === "voice") {                       // speak completed sentences as they form
       const pending = shown.slice(spoken);
-      const end = lastSentenceEnd(pending);
+      const end = speakableChunk(pending);
       if (end > 0) { speakQueued(pending.slice(0, end), lang); spoken += end; }
     }
   };
