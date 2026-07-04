@@ -67,14 +67,26 @@ const TIERS = {
 const STOP = new Set("the a an and or of to in for with that this must should be is are it its user users data use uses using via when then each item items list add show display support include page app apply able allow can will make store when where which what".split(" "));
 const escapeHtml = (s) => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-/* Inject a tiny probe that captures runtime/console errors and reports readiness
-   (title, visible element count) back to the parent via postMessage. */
+/* Inject a tiny probe that captures runtime/console errors, then actually
+   EXERCISES the app (clicks buttons, presses arrow/space keys, taps a canvas)
+   and reports whether it survived interaction — so the eval catches bugs that
+   only appear on first input, and the repair loop fixes them. */
 function instrument(html, token) {
-  const probe = `<script>(function(){var E=[];function send(){try{parent.postMessage({__actig:"${token}",errors:E.slice(0,20),title:document.title||"",kids:document.body?document.body.childElementCount:0},"*");}catch(e){}}
-window.addEventListener("error",function(e){E.push((e.message||"script error")+(e.lineno?" (line "+e.lineno+")":""));});
-window.addEventListener("unhandledrejection",function(e){E.push("promise: "+((e.reason&&e.reason.message)||e.reason||"rejection"));});
-var _ce=console.error;console.error=function(){try{E.push("console.error: "+Array.prototype.map.call(arguments,String).join(" "));}catch(x){}try{_ce.apply(console,arguments);}catch(x){}};
-window.addEventListener("load",function(){setTimeout(send,900);});setTimeout(send,2600);})();<\/script>`;
+  const probe = `<script>(function(){var E=[],IA=false,IE=0;
+function send(){try{parent.postMessage({__actig:"${token}",errors:E.slice(0,20),title:document.title||"",kids:document.body?document.body.childElementCount:0,inter:{done:IA,errs:IE}},"*");}catch(e){}}
+function rec(m){E.push(m);if(IA)IE++;}
+window.addEventListener("error",function(e){rec((e.message||"script error")+(e.lineno?" (line "+e.lineno+")":""));});
+window.addEventListener("unhandledrejection",function(e){rec("promise: "+((e.reason&&e.reason.message)||e.reason||"rejection"));});
+var _ce=console.error;console.error=function(){try{rec("console.error: "+Array.prototype.map.call(arguments,String).join(" "));}catch(x){}try{_ce.apply(console,arguments);}catch(x){}};
+function poke(){IA=true;try{
+var btns=document.querySelectorAll("button,a,[role=button],input[type=button],input[type=submit]");
+for(var i=0;i<btns.length&&i<5;i++){try{btns[i].click();}catch(x){IE++;}}
+["ArrowRight","ArrowUp"," "].forEach(function(k){try{var ev=new KeyboardEvent("keydown",{key:k,bubbles:true});document.dispatchEvent(ev);window.dispatchEvent(ev);}catch(x){}});
+var cv=document.querySelector("canvas");
+if(cv){try{var r=cv.getBoundingClientRect();var o={bubbles:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2};cv.dispatchEvent(new PointerEvent("pointerdown",o));cv.dispatchEvent(new PointerEvent("pointerup",o));}catch(x){}}
+}catch(x){}}
+window.addEventListener("load",function(){setTimeout(poke,500);setTimeout(send,1600);});
+setTimeout(function(){if(!IA)poke();setTimeout(send,600);},2300);})();<\/script>`;
   if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, m => m + probe);
   if (/<html[^>]*>/i.test(html)) return html.replace(/<html[^>]*>/i, m => m + probe);
   return probe + html;
@@ -140,16 +152,15 @@ export function createBuilder(deps) {
     let repStart = resume ? (resume.repairsDone || 0) : 0;
     const save = (extra) => { try { deps.store.buildWip = { spec, ref, checklist, arch, best, candidatesDone: candStart, repairsDone: repStart, ts: Date.now(), ...extra }; } catch {} };
 
-    // 1) Plan an acceptance checklist (steers generation + drives the eval score).
-    if (tier.plan && !checklist.length && candStart === 0) {
-      onStatus?.("Planning…");
-      try { checklist = await planChecklist(spec, ref); } catch {}
-      save({});
-    }
-    // 1b) OVERDRIVE: architecture pass — decide the technical design up front.
-    if (tier.arch && !arch && candStart === 0) {
-      onStatus?.(tierTag(tier, "Architecture pass…"));
-      try { arch = await planArchitecture(spec, ref, checklist); } catch {}
+    // 1) Plan the acceptance checklist and (Overdrive) the architecture IN
+    //    PARALLEL — same calls as before, roughly half the planning wall-clock.
+    if ((tier.plan && !checklist.length || tier.arch && !arch) && candStart === 0) {
+      onStatus?.(tierTag(tier, "Planning…"));
+      const [cl, ar] = await Promise.all([
+        tier.plan && !checklist.length ? planChecklist(spec, ref).catch(() => []) : checklist,
+        tier.arch && !arch ? planArchitecture(spec, ref, []).catch(() => "") : arch,
+      ]);
+      checklist = cl || []; arch = ar || "";
       save({});
     }
     const isGame = GAME_RE.test(spec + " " + checklist.join(" "));
@@ -159,26 +170,37 @@ export function createBuilder(deps) {
       + (isGame ? GAME_REQ : "")
       + `\n\nRemember: index.html entry point, self-contained, runs in the browser.`;
 
-    // 2) Generate candidate(s), evaluate each, keep the best.
-    for (let c = candStart; c < tier.candidates; c++) {
-      onStatus?.(tier.candidates > 1 ? `Generating candidate ${c + 1}/${tier.candidates}…` : "Generating…");
-      let raw;
-      try {
-        raw = await deps.llmGenerate(SYSTEM, user, {
-          onToken: (_d, full) => onStatus?.(`Generating… ${full.length.toLocaleString()} chars`),
-          maxTokens: tier.tokens || 8000, temperature: c === 0 ? 0.2 : 0.5,
-        });
-      } catch (e) { if (!best) throw e; else break; }
-      const files = parseFiles(raw);
-      candStart = c + 1;
-      if (files["index.html"]) {
-        onStatus?.("Testing candidate…");
-        const evalRes = await evaluate(files, checklist, isGame);
-        renderMetrics(evalRes, tierTag(tier, `Candidate ${c + 1}`));
-        if (!best || evalRes.score > best.eval.score) best = { files, eval: evalRes };
+    // 2) Generate ALL remaining candidates CONCURRENTLY (same call count, ~the
+    //    wall-clock of one), then evaluate them and keep the best.
+    const TEMPS = [0.2, 0.5, 0.35, 0.65];
+    const remaining = Math.max(0, tier.candidates - candStart);
+    if (remaining > 0) {
+      onStatus?.(tierTag(tier, remaining > 1 ? `Generating ${remaining} candidates in parallel…` : "Generating…"));
+      let done = 0;
+      const jobs = [];
+      for (let c = 0; c < remaining; c++) {
+        jobs.push(deps.llmGenerate(SYSTEM, user, { maxTokens: tier.tokens || 8000, temperature: TEMPS[(candStart + c) % TEMPS.length] })
+          .then(raw => { onStatus?.(tierTag(tier, `Candidate ${++done}/${remaining} ready…`)); return parseFiles(raw); })
+          .catch(() => null));
       }
-      save({ candidatesDone: candStart, repairsDone: 0 });
-      if (best && best.eval.score >= 100) break;
+      let results = await Promise.all(jobs);
+      // Throttle fallback: if the parallel batch produced nothing usable, try once sequentially.
+      if (!best && !results.some(f => f && f["index.html"])) {
+        onStatus?.("Retrying generation…");
+        try { results = [parseFiles(await deps.llmGenerate(SYSTEM, user, { maxTokens: tier.tokens || 8000, temperature: 0.2 }))]; }
+        catch (e) { throw e; }
+      }
+      candStart = tier.candidates;
+      let n = 0;
+      for (const files of results) {
+        if (!files || !files["index.html"]) continue;
+        onStatus?.(`Testing candidate ${++n}…`);
+        const evalRes = await evaluate(files, checklist, isGame);
+        renderMetrics(evalRes, tierTag(tier, `Candidate ${n}`));
+        if (!best || evalRes.score > best.eval.score) best = { files, eval: evalRes };
+        if (best.eval.score >= 100) break;
+      }
+      save({ candidatesDone: candStart, repairsDone: repStart });
     }
     if (!best) throw new Error("the model did not return a usable index.html — try again or rephrase");
 
@@ -340,7 +362,7 @@ export function createBuilder(deps) {
     const run = await new Promise((resolve) => {
       let done = false;
       const finish = (r) => { if (done) return; done = true; window.removeEventListener("message", onMsg); resolve(r); };
-      const onMsg = (e) => { if (e.data && e.data.__actig === token) finish({ errors: e.data.errors || [], title: e.data.title, kids: e.data.kids }); };
+      const onMsg = (e) => { if (e.data && e.data.__actig === token) finish({ errors: e.data.errors || [], title: e.data.title, kids: e.data.kids, inter: e.data.inter || null }); };
       window.addEventListener("message", onMsg);
       setTimeout(() => finish({ errors: [], title: "", kids: -1, timeout: true }), 4500);
       try { frame.src = url; } catch { finish({ errors: ["failed to load"], kids: -1 }); }
@@ -364,6 +386,7 @@ export function createBuilder(deps) {
     add("Runs with 0 console/runtime errors", !run.timeout && errors.length === 0, 26);
     add("Renders visible UI", run.kids > 0, 14);
     add("No TODO/placeholder text", !/\b(todo|fixme|lorem ipsum|your code here|implement this|coming soon)\b/i.test(html), 8);
+    add("Survives interaction (buttons/keys)", !run.timeout && (!run.inter || (run.inter.done && run.inter.errs === 0)), 12);
     add("Mobile-ready (viewport meta)", /<meta[^>]+name=["']?viewport/i.test(html), 6);
     add("Accessibility basics (lang + img alt)", /<html[^>]+lang=/i.test(html) && imgsHaveAlt, 8);
     if (checklist.length) {

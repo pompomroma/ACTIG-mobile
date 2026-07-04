@@ -147,6 +147,10 @@ changed by the app; quality gains come from real data, search grounding, and pro
 *inference-time* technique, not from changing the model or paying: Vibe Build can
 **plan → generate best-of-N candidates → actually run each in a sandbox →
 self-critique and auto-repair** the code until a live **Evaluation scorecard**
+(candidates now generate **in parallel** — Max/Overdrive take roughly the time of
+one generation — and the sandbox **actually interacts** with the app: it clicks
+buttons, presses keys, and taps the canvas, so input-triggered bugs are caught
+and auto-repaired)
 (parses, 0 runtime/console errors, renders UI, checklist coverage) stops improving.
 Pick **Fast / High / Max** in Settings (default **Max** = best-of-3 candidates,
 up to 4 auto-repair passes, larger token budget, and extra eval checks for mobile
