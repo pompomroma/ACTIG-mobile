@@ -6,6 +6,7 @@
 
 const WAKE = "wake up actig";
 const REACTION = "ACTIG at your service sir";
+const REACTION_KO = "액티그, 대기 중입니다.";        // Korean greeting on wake
 // Default brain: Pollinations — a free, OpenAI-compatible, CORS-enabled endpoint
 // that needs NO API key and NO proxy, so the web app answers out of the box.
 // (NVIDIA Nemotron is still available: paste its endpoint + key in Settings, but
@@ -38,6 +39,9 @@ const store = {
   set gourmet(v) { localStorage.setItem("actig.gourmet", v ? "1" : "0"); },
   get overdrive() { return localStorage.getItem("actig.overdrive") === "1"; },
   set overdrive(v) { localStorage.setItem("actig.overdrive", v ? "1" : "0"); },
+  // Primary language: "auto" (follow the user turn-by-turn), "en-US", or "ko-KR".
+  get lang() { return localStorage.getItem("actig.lang") || "auto"; },
+  set lang(v) { localStorage.setItem("actig.lang", v || "auto"); },
   // In-progress build checkpoint so a suspended/reloaded build can resume.
   get buildWip() { try { return JSON.parse(localStorage.getItem("actig.buildWip") || "null"); } catch { return null; } },
   set buildWip(v) { if (v) { try { localStorage.setItem("actig.buildWip", JSON.stringify(v)); } catch {} } else localStorage.removeItem("actig.buildWip"); },
@@ -106,13 +110,24 @@ function augmentWithFiles(text, atts) {
   return out;
 }
 
-/* ---------- language ---------- */
+/* ---------- language (English + Korean are first-class) ---------- */
 function detectLang(t) {
   if (/[가-힣]/.test(t)) return "ko-KR";
   if (/[぀-ヿ]/.test(t)) return "ja-JP";
   if (/[一-鿿]/.test(t)) return "zh-CN";
   if (/[à-ÿ]/.test(t) && /\b(le|la|une?|est|je)\b/i.test(t)) return "fr-FR";
-  return "en-US";
+  if (/[a-z]/i.test(t)) return "en-US";
+  // No script signal (numbers/emoji/empty) → the set preference, else the last language used.
+  return store.lang !== "auto" ? store.lang : (lastLang || "en-US");
+}
+/* Active primary language for proactive speech (greetings, acks, announcements). */
+function prefLang() { return store.lang !== "auto" ? store.lang : (lastLang || "en-US"); }
+/* Whisper hint: fixed preference wins; in auto mode stay sticky to the last
+   language, which massively improves short Korean utterances over auto-detect. */
+function sttHint() {
+  if (store.lang === "ko-KR") return "ko";
+  if (store.lang === "en-US") return "en";
+  return lastLang === "ko-KR" ? "ko" : "auto";
 }
 
 /* ---------- text to speech ---------- */
@@ -121,7 +136,13 @@ function speak(text, lang) {
   speechSynthesis.cancel();
   speakQueued(text, lang);
 }
-/* Pick the most natural available voice per language (premium/enhanced first). */
+/* Pick the most natural available voice per language (premium/enhanced first).
+   Known high-quality system voices are preferred by name — Yuna is Apple's best
+   Korean voice; Samantha/Ava/Daniel are strong English ones. */
+const VOICE_PREF = {
+  ko: ["yuna", "sora", "suhyun", "jian"],
+  en: ["samantha", "ava", "allison", "daniel", "karen"],
+};
 let voiceCache = {};
 function bestVoice(lang) {
   if (!("speechSynthesis" in window)) return null;
@@ -129,8 +150,14 @@ function bestVoice(lang) {
   const all = speechSynthesis.getVoices() || [];
   const base = (lang || "en-US").split("-")[0];
   const cands = all.filter(v => v.lang && v.lang.toLowerCase().startsWith(base));
-  const rank = (v) => (/premium|enhanced|natural|neural|siri/i.test(v.name) ? 3 : 0)
-    + (v.lang.toLowerCase() === (lang || "").toLowerCase() ? 2 : 0) + (v.localService ? 1 : 0);
+  const names = VOICE_PREF[base] || [];
+  const rank = (v) => {
+    const n = v.name.toLowerCase();
+    const named = names.findIndex(p => n.includes(p));
+    return (named >= 0 ? (names.length - named) * 10 : 0)
+      + (/premium|enhanced|natural|neural|siri/i.test(v.name) ? 3 : 0)
+      + (v.lang.toLowerCase() === (lang || "").toLowerCase() ? 2 : 0) + (v.localService ? 1 : 0);
+  };
   cands.sort((a, b) => rank(b) - rank(a));
   return (voiceCache[lang] = cands[0] || null);
 }
@@ -145,7 +172,8 @@ function speakQueued(text, lang) {
   const u = new SpeechSynthesisUtterance(t);
   u.lang = lang || "en-US";
   const v = bestVoice(u.lang); if (v) u.voice = v;
-  u.rate = 1.04;                                   // brisk, conversational pace
+  // Korean sounds most natural at neutral pace; English slightly brisk.
+  u.rate = u.lang.startsWith("ko") ? 1.0 : 1.04;
   u.onstart = () => { speaking = true; };
   u.onend = () => { speaking = false; };
   speechSynthesis.speak(u);
@@ -271,10 +299,12 @@ function recordWithVAD(rec, an, { silenceMs = 650, preSpeechMs = 5000, maxMs = 1
 }
 
 /* Tolerant wake-word match: on-device Whisper often mishears the coined word
-   "ACTIG" (e.g. "active", "at tig"), so accept any "wake up …" phrasing. */
+   "ACTIG" (e.g. "active", "at tig"), so accept any "wake up …" phrasing — and
+   the Korean equivalents ("일어나 액티그", "액티그 깨어나", or just "액티그야"). */
 function isWake(t) {
   const s = (t || "").toLowerCase();
-  return s.includes(WAKE) || (s.includes("wake") && s.includes("up"));
+  if (s.includes(WAKE) || (s.includes("wake") && s.includes("up"))) return true;
+  return /(액티그|악티그|엑티그)/.test(s) && /(일어나|깨어|기상|야\b|시작)/.test(s) || /일어나|깨어나/.test(s) && /[가-힣]/.test(s);
 }
 
 /* Open the mic. MUST be called synchronously inside a tap handler (before any
@@ -332,13 +362,15 @@ function stopMic(status) {
   setStatus(status || "Mic off");
 }
 
-/* The wake word was heard — greet once and start feeding speech to the AI. */
+/* The wake word was heard — greet once (in the primary language) and start
+   feeding speech to the AI. */
 function becomeAwake() {
   if (awake) return;
   awake = true;
   setStatus("Awake — listening…");
-  addBubble("sys", REACTION);
-  speak(REACTION, "en-US");
+  const ko = prefLang() === "ko-KR";
+  addBubble("sys", ko ? REACTION_KO : REACTION);
+  speak(ko ? REACTION_KO : REACTION, ko ? "ko-KR" : "en-US");
 }
 
 /* Android/desktop path: native continuous recognition handles both the wake
@@ -346,7 +378,7 @@ function becomeAwake() {
 function startWakeRecognition() {
   try {
     wakeRec = new SR();
-    wakeRec.continuous = true; wakeRec.interimResults = true; wakeRec.lang = "en-US";
+    wakeRec.continuous = true; wakeRec.interimResults = true; wakeRec.lang = prefLang();
     wakeRec.onresult = (e) => {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
@@ -380,9 +412,10 @@ async function listenLoop(stream) {
       recording = null;
       if (!micOn || listenAbort) break;
       if (!heard) continue;                            // window passed in silence — listen again
-      if (awake) reflexAck(lastLang);                  // react INSTANTLY while we transcribe/think
+      if (awake) reflexAck(prefLang());                // react INSTANTLY while we transcribe/think
       setStatus("Transcribing…");
-      text = await sp.transcribeBlob(blob, "auto", setStatus);
+      text = await sp.transcribeBlob(blob, sttHint(), setStatus);
+      if (/[가-힣]/.test(text)) lastLang = "ko-KR";     // keep the language sticky for the next turn
     } catch (e) {
       recording = null;
       if (!micOn || listenAbort) break;
@@ -417,7 +450,11 @@ async function wake() {
 
 /* ---------- brain ---------- */
 function systemPrompt(lang) {
-  return `You are ACTIG, a witty, warm JARVIS-style assistant. Reply in ${lang}. `
+  const ko = (lang || "").startsWith("ko");
+  return `You are ACTIG, a witty, warm JARVIS-style assistant, natively bilingual in English and Korean. Reply in ${lang}. `
+    + (ko ? `한국어로 답할 때는 번역투 없이 완전히 자연스러운 원어민 한국어를 사용하세요 — 자연스러운 존댓말(해요체), 자연스러운 어순과 조사, 필요할 때만 간결한 개조식. `
+          : `Use natural, native-level phrasing. `)
+    + `If the user writes in Korean answer in Korean; if in English answer in English — never mix unless they do. `
     + `Keep answers short, natural and conversational — like spoken dialogue, usually 1-3 sentences. `
     + `Get to the point; expand only when asked. `
     + `When genuinely useful, end with:\n<<OPTIONS>>\n- option\n<<SUGGESTIONS>>\n- recommendation`;
@@ -665,7 +702,7 @@ async function researchLLM(history, lang, onToken) {
    named area, using free OSM services (Nominatim geocoding + Overpass POIs), then
    ranks them against every detail of the request. Asks follow-up options when the
    request is ambiguous (via the <<OPTIONS>> chips). */
-const GOURMET_TOGGLE_RE = /\bgourmet mode\b/i;
+const GOURMET_TOGGLE_RE = /\bgourmet mode\b|(미식|구르메|고메)\s*모드/i;
 const GOURMET_REQ_RE = /\b(restaurant|places? to eat|somewhere to eat|dinner|lunch spot|brunch|food (spot|place)|eatery|bistro|izakaya|sushi place|steakhouse|michelin|맛집|식당|レストラン|餐厅|餐廳)\b/i;
 
 function extractArea(text) {
@@ -775,7 +812,7 @@ function setGourmet(on) {
 
 /* Overdrive 🚀 — runs the deepest vibe-coding pipeline (architecture pass,
    best-of-4, 6 repairs, post-edit verification). Same free model, just slower. */
-const OVERDRIVE_RE = /\b(overdrive( mode)?|maximum (effort|power|quality))\b/i;
+const OVERDRIVE_RE = /\b(overdrive( mode)?|maximum (effort|power|quality))\b|오버\s*드라이브/i;
 function setOverdrive(on) {
   store.overdrive = on;
   const b = $("overdriveBtn"); if (b) b.classList.toggle("on", on);
@@ -841,17 +878,21 @@ async function submit(text, source, atts) {
 
   // Overdrive 🚀 — toggle the deepest vibe-coding pipeline by command.
   if (OVERDRIVE_RE.test(low)) {
-    const off = /\b(off|end|exit|stop|disable)\b/.test(low);
+    const off = /\b(off|end|exit|stop|disable)\b|꺼|끄|해제|종료/.test(low);
+    const ko = lang === "ko-KR";
     setOverdrive(!off);
-    return finish(off ? "Overdrive off — back to the standard pipeline."
-      : "Overdrive engaged, sir. Builds and edits now run the deepest pipeline — architecture pass, four candidates, six repair rounds, and change verification. Slower, but the best I can produce.", lang, source);
+    return finish(off ? (ko ? "오버드라이브를 끕니다 — 기본 파이프라인으로 돌아갈게요." : "Overdrive off — back to the standard pipeline.")
+      : (ko ? "오버드라이브 가동합니다. 설계 단계, 후보 4개, 수리 6회, 변경 검증까지 — 가장 깊은 파이프라인으로 만들게요. 느리지만 최고 품질입니다."
+            : "Overdrive engaged, sir. Builds and edits now run the deepest pipeline — architecture pass, four candidates, six repair rounds, and change verification. Slower, but the best I can produce."), lang, source);
   }
 
   // Gourmet mode 🍽 — toggle by command; handle food requests with real local data.
   if (GOURMET_TOGGLE_RE.test(low)) {
-    const off = /\b(off|end|exit|stop|disable)\b/.test(low);
+    const off = /\b(off|end|exit|stop|disable)\b|꺼|끄|해제|종료/.test(low);
+    const ko = lang === "ko-KR";
     setGourmet(!off);
-    return finish(off ? "Gourmet mode off." : "Gourmet mode on, sir. Tell me the cuisine, budget, vibe — every detail helps.", lang, source);
+    return finish(off ? (ko ? "미식 모드를 종료합니다." : "Gourmet mode off.")
+      : (ko ? "미식 모드 켰습니다. 원하는 음식, 예산, 분위기 — 자세할수록 좋아요." : "Gourmet mode on, sir. Tell me the cuisine, budget, vibe — every detail helps."), lang, source);
   }
   if (store.gourmet || GOURMET_REQ_RE.test(low)) {
     if (!store.gourmet) setGourmet(true);           // a food request auto-activates gourmet mode
@@ -1143,7 +1184,8 @@ function boot() {
   $("apiKey").value = store.key; $("preferOffline").checked = store.offline;
   $("model").value = store.model; $("endpoint").value = store.endpoint;
   $("buildModel").value = store.buildModel; $("ghToken").value = store.ghToken;
-  $("buildQuality").value = store.quality;
+  $("buildQuality").value = store.quality; $("langPref").value = store.lang;
+  if (store.lang !== "auto") lastLang = store.lang;
   $("saveKey").onclick = () => {
     store.key = $("apiKey").value;
     store.model = $("model").value;
@@ -1151,6 +1193,8 @@ function boot() {
     store.buildModel = $("buildModel").value;
     store.ghToken = $("ghToken").value;
     store.quality = $("buildQuality").value;
+    store.lang = $("langPref").value;
+    if (store.lang !== "auto") lastLang = store.lang;
     store.offline = $("preferOffline").checked;
     $("model").value = store.model; $("endpoint").value = store.endpoint; // reflect defaults
     setStatus("Saved");

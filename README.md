@@ -129,7 +129,13 @@ reactor ring, scanlines, glass panels, Orbitron/Rajdhani type) and the app is no
 most natural TTS voice available and turn-taking is snappier — and ACTIG has a
 **reflex**: the instant your turn ends it acknowledges aloud ("On it, sir…") while
 it transcribes and thinks, the first spoken chunk starts earlier, and text replies
-show an instant thinking indicator — no dead air, no ability reduced. (As always: model
+show an instant thinking indicator — no dead air, no ability reduced. **Korean is a
+first-class language alongside English**: set it (or Auto) in Settings ▸ Language.
+ACTIG replies in native-level Korean (해요체, no translationese), speaks with the
+best Korean system voice (Yuna preferred) at natural pace, recognizes Korean speech
+accurately (Whisper gets a Korean hint instead of auto-detect), greets in Korean
+("액티그, 대기 중입니다"), and understands Korean wake ("일어나 액티그") and mode
+commands (미식 모드, 오버드라이브). (As always: model
 benchmark scores and hardware TOPS are fixed properties and are not — cannot be —
 changed by the app; quality gains come from real data, search grounding, and prompts.)
 
