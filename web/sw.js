@@ -1,6 +1,6 @@
 /* ACTIG PWA service worker — caches the app shell so it launches offline.
    (Three.js / MediaPipe load from CDN and need a network the first time.) */
-const CACHE = "actig-v31";
+const CACHE = "actig-v32";
 const SHELL = [
   "./", "./index.html", "./styles.css", "./app.js", "./studio.js", "./speech.js",
   "./build.js", "./manifest.webmanifest",

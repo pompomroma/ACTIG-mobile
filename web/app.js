@@ -126,17 +126,16 @@ function detectLang(t) {
 function prefLang() { return store.lang !== "auto" ? store.lang : (lastLang || "en-US"); }
 /* Whisper hint: fixed preference wins; in auto mode stay sticky to the last
    language, which massively improves short Korean utterances over auto-detect. */
+/* Per-utterance language: Whisper AUTO-DETECTS each turn, so Korean speech
+   comes out in Korean and English speech in English — no forcing, no sticky
+   lock-in. Only an explicit English-only preference forces English. */
 function sttHint() {
-  if (store.lang === "ko-KR") return "ko";
-  if (store.lang === "en-US") return "en";
-  return lastLang === "ko-KR" ? "ko" : "auto";
+  return store.lang === "en-US" ? "en" : "auto";
 }
-/* Whisper model choice: when Korean is active use whisper-base — noticeably
-   better Hangul recognition than tiny (bigger one-time download, still free
-   and on-device). English/auto stays on the fast tiny model. */
-function sttModel() {
-  return (store.lang === "ko-KR" || lastLang === "ko-KR") ? "Xenova/whisper-base" : undefined;
-}
+/* Always transcribe with whisper-base: its language auto-detection is what
+   makes per-utterance KO/EN actually reliable (tiny routinely mis-hears Korean
+   as English). pickPipe serves turns with tiny only while base first loads. */
+function sttModel() { return "Xenova/whisper-base"; }
 
 /* ---------- text to speech ---------- */
 function speak(text, lang) {
@@ -371,7 +370,9 @@ function startMic(stream) {
   } else {
     listenStream = stream;
     analyser = makeAnalyser(stream);            // for silence detection (auto end-of-turn)
-    speech().then(sp => sp.warmup?.(undefined, sttModel())).catch(() => {});  // pre-load Whisper so turn 1 is fast
+    // Pre-load BOTH models: tiny is ready in seconds (serves the first turns),
+    // base loads behind it and takes over for reliable KO/EN auto-detection.
+    speech().then(sp => { sp.warmup?.(); sp.warmup?.(undefined, "Xenova/whisper-base"); }).catch(() => {});
     listenLoop(stream);                         // iOS: continuous on-device Whisper loop
   }
 }
@@ -413,7 +414,7 @@ function startWakeRecognition() {
       }
     };
     wakeRec.onerror = () => {};
-    wakeRec.onend = () => { if (micOn && !userMuted) { try { wakeRec.start(); } catch {} } };
+    wakeRec.onend = () => { if (micOn && !userMuted) { try { wakeRec.lang = prefLang(); wakeRec.start(); } catch {} } };
     wakeRec.start();
   } catch { listenLoop(listenStream); }       // fall back to the Whisper loop
 }
@@ -440,10 +441,15 @@ async function listenLoop(stream) {
       if (awake) reflexAck(prefLang());                // react INSTANTLY while we transcribe/think
       setStatus("Transcribing…");
       text = await sp.transcribeBlob(blob, sttHint(), setStatus, sttModel());
-      if (/[가-힣]/.test(text)) {
-        if (lastLang !== "ko-KR") sp.warmup?.(undefined, "Xenova/whisper-base"); // pre-load the better Korean model
-        lastLang = "ko-KR";                             // keep the language sticky for the next turn
+      // Safeguard: Korean context but the auto pass produced no Hangul and looks
+      // garbled/short → re-transcribe forced-Korean and prefer it if it's real.
+      if (!/[가-힣]/.test(text) && (store.lang === "ko-KR" || lastLang === "ko-KR") && text.trim().length < 8) {
+        try {
+          const koText = await sp.transcribeBlob(blob, "ko", setStatus, sttModel());
+          if (/[가-힣]/.test(koText)) text = koText;
+        } catch {}
       }
+      if (/[가-힣]/.test(text)) lastLang = "ko-KR";     // sticky for prompts/acks/TTS defaults
     } catch (e) {
       recording = null;
       if (!micOn || listenAbort) break;
