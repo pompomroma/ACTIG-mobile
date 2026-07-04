@@ -105,6 +105,21 @@ export async function createStudio(host) {
     selected.scale.x = clamp(base.x * (1 + dx * 1.6), 0.1, 8);
     selected.scale.y = clamp(base.y * (1 + dy * 1.6), 0.1, 8);
   }
+  /* Numeric strain from chat/voice commands. ops = [{axis:"x"|"y"|"z"|null, op:
+     "mul"|"set", value}] — null axis applies to all three (uniform). Returns the
+     resulting scale, or null when nothing is selected. */
+  function strainAxis(ops) {
+    if (!selected || !Array.isArray(ops) || !ops.length) return null;
+    for (const o of ops) {
+      const axes = o.axis ? [o.axis] : ["x", "y", "z"];
+      for (const a of axes) {
+        const cur = selected.scale[a];
+        selected.scale[a] = clamp(o.op === "set" ? o.value : cur * o.value, 0.05, 20);
+      }
+    }
+    return { x: selected.scale.x, y: selected.scale.y, z: selected.scale.z };
+  }
+  function hasSelection() { return !!selected; }
 
   renderer.domElement.addEventListener("pointerdown", (e) => {
     const [nx, ny] = ndcFromClient(e.clientX, e.clientY);
@@ -362,5 +377,5 @@ export async function createStudio(host) {
   })();
 
   spawn("box");
-  return { spawn, clone, remove, toggleGestures, toggleStretch, beginAttach, submitAttach, mergeSelected, exportGLB };
+  return { spawn, clone, remove, toggleGestures, toggleStretch, beginAttach, submitAttach, mergeSelected, exportGLB, strainAxis, hasSelection };
 }

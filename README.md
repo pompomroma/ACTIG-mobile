@@ -112,7 +112,9 @@ the whole project as a **`.glb`** file. **✋ Gestures** enables camera hand con
 velocity-predicted, with the drag interpolated at display rate — 60–120fps motion
 regardless of camera/inference speed): pinch over an object to
 select and drag it, and — with Stretch on — pinch-drag (or two-hand spread) to strain
-it. Games built with Vibe Build are generated as **actually playable** games (real
+it. Objects can also be strained by **exact numbers via chat or voice**: "stretch x
+by 2.5 and y by 0.5", "scale to 1.2", "widen by 150%", "가로 2배로 늘려" — ACTIG
+applies it to the selected object and reads back the resulting X/Y/Z scale. Games built with Vibe Build are generated as **actually playable** games (real
 game loop, keyboard + touch controls, scoring, win/lose + restart), not screen mockups.
 
 **Gourmet mode 🍽, research, PC, and the JARVIS look.** Tap 🍽 (or say "gourmet

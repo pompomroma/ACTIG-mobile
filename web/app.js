@@ -810,6 +810,36 @@ function setGourmet(on) {
   setStatus(on ? "Gourmet mode 🍽 — tell me what you're craving" : "Ready");
 }
 
+/* ---------- numeric strain commands ("stretch x by 2.5", "가로 2배") ----------
+   Precise straining of the selected 3D object by chat or voice: axis words map
+   to x/y/z, numbers give the exact amount ("by/×/배" = multiply, "%" = percent,
+   "to" = set the absolute scale). Multiple axes per command are supported. */
+const AXIS_WORDS = [
+  ["x", "x"], ["width", "x"], ["wider", "x"], ["horizontal", "x"], ["가로", "x"], ["폭", "x"], ["넓이", "x"],
+  ["y", "y"], ["height", "y"], ["taller", "y"], ["vertical", "y"], ["세로", "y"], ["높이", "y"],
+  ["z", "z"], ["depth", "z"], ["deeper", "z"], ["thickness", "z"], ["두께", "z"], ["깊이", "z"],
+];
+const STRAIN_TRIGGER = /\b(strain|stretch|scale|resize|widen|lengthen|shorten|shrink|extend|enlarge|taller|wider|deeper)\b|늘려|늘여|줄여|잡아\s*늘|스트레치|스케일|크기|배로|배 늘/i;
+function parseStrain(text) {
+  if (!STRAIN_TRIGGER.test(text)) return null;
+  const ops = [];
+  for (const part of text.split(/,|\band\b|그리고|하고/i)) {
+    const num = part.match(/(-?\d+(?:\.\d+)?)/);
+    if (!num) continue;
+    let value = parseFloat(num[1]);
+    if (!(value > 0)) continue;
+    if (/%/.test(part)) value = value / 100;
+    const pl = part.toLowerCase();
+    let axis = null;
+    for (const [w, a] of AXIS_WORDS) {
+      if ((/^[a-z]/.test(w) ? new RegExp(`\\b${w}\\b`) : new RegExp(w)).test(pl)) { axis = a; break; }
+    }
+    const isSet = /\bto\b|으로\s*(맞|설정|해)|로\s*(맞|설정|해)/.test(pl);
+    ops.push({ axis, op: isSet ? "set" : "mul", value });
+  }
+  return ops.length ? ops : null;
+}
+
 /* Overdrive 🚀 — runs the deepest vibe-coding pipeline (architecture pass,
    best-of-4, 6 repairs, post-edit verification). Same free model, just slower. */
 const OVERDRIVE_RE = /\b(overdrive( mode)?|maximum (effort|power|quality))\b|오버\s*드라이브/i;
@@ -894,7 +924,7 @@ async function submit(text, source, atts) {
     return finish(off ? (ko ? "미식 모드를 종료합니다." : "Gourmet mode off.")
       : (ko ? "미식 모드 켰습니다. 원하는 음식, 예산, 분위기 — 자세할수록 좋아요." : "Gourmet mode on, sir. Tell me the cuisine, budget, vibe — every detail helps."), lang, source);
   }
-  if (store.gourmet || GOURMET_REQ_RE.test(low)) {
+  if ((store.gourmet || GOURMET_REQ_RE.test(low)) && !parseStrain(text)) {
     if (!store.gourmet) setGourmet(true);           // a food request auto-activates gourmet mode
     runGourmet(text || "Find me a nearby place that serves food like in the attached photo.", lang, source, atts, acked);
     return;
@@ -906,6 +936,22 @@ async function submit(text, source, atts) {
     const spec = text.replace(/^\s*(please\s+)?(vibe ?code|build|make|create|generate|develop|code)\s+(me\s+)?(a|an|the)?\s*/i, "").trim() || text;
     clearBuildEditMode();
     runBuild(spec, source, lang, atts);
+    return;
+  }
+
+  // Precise 3D strain by numbers — "stretch x by 2.5 and y by 0.5", "scale to 1.2",
+  // "가로 2배로 늘려". Works by voice or text; applies to the selected object.
+  const strainOps = parseStrain(text);
+  if (strainOps) {
+    const ko = lang === "ko-KR";
+    ensureStudio().then(() => {
+      switchTab("studio");
+      const s = studio && studio.hasSelection() ? studio.strainAxis(strainOps) : null;
+      if (!s) return finish(ko ? "먼저 3D 탭에서 오브젝트를 생성하거나 선택해 주세요." : "Spawn or select an object in the 3D tab first, sir.", lang, source);
+      const f = (n) => Math.round(n * 100) / 100;
+      finish(ko ? `적용했어요 — 현재 스케일은 X ${f(s.x)}, Y ${f(s.y)}, Z ${f(s.z)} 입니다.`
+                : `Done — the object's scale is now X ${f(s.x)}, Y ${f(s.y)}, Z ${f(s.z)}.`, lang, source);
+    }).catch(() => finish(ko ? "3D 스튜디오를 여는 데 실패했어요." : "Couldn't open the 3D studio.", lang, source));
     return;
   }
 
