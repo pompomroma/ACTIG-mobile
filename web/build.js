@@ -29,7 +29,7 @@ HARD RULES:
 - Performance: requestAnimationFrame for animation, clean up timers/listeners, avoid memory leaks, keep it smooth.
 - Security: escape/encode any user-provided or dynamic content inserted into the DOM (no unsafe innerHTML with untrusted data).
 - Persist state with localStorage/IndexedDB when useful. Only call public CORS-friendly APIs, if any.
-- For 3D: prefer procedural geometry with three.js from CDN. If a model FILE is required, emit a valid, self-contained glTF 2.0 file (buffers inlined as base64 data URIs) at assets/<name>.gltf and load it with GLTFLoader from CDN.
+- For 3D: prefer procedural geometry with three.js from CDN — DETAILED geometry (generous segment counts, composed shapes for real silhouettes), PBR materials (metalness/roughness, emissive accents), 2+ lights and shadows. If a model FILE is required, emit a valid, self-contained glTF 2.0 file (buffers inlined as base64 data URIs, correct normals, real PBR materials) at assets/<name>.gltf and load it with GLTFLoader from CDN.
 - Before finishing, mentally execute each feature and fix anything that would error or look broken.
 
 Build EXACTLY what the user asks — complete, correct, optimized, and genuinely high quality.`;
@@ -37,6 +37,15 @@ Build EXACTLY what the user asks — complete, correct, optimized, and genuinely
 // Games must be *playable*, not title/screen mockups.
 const GAME_RE = /\b(game|gameplay|playable|arcade|snake|tetris|pong|platformer|shooter|puzzle|maze|flappy|breakout|invaders|runner|rpg|score|player|enemy|level|shoot|jump|dodge)\b/i;
 const GAME_REQ = `\n\nTHIS IS A GAME — it MUST be fully playable, never a title screen or mockup. Implement: a real game loop with requestAnimationFrame; responsive controls for BOTH keyboard (arrow keys / WASD / space) AND touch (on-screen buttons or swipe/tap); a player and entities that actually move with collision detection; scoring and increasing difficulty; clear win/lose states with a restart button. Any start screen must lead directly into real, interactive gameplay.`;
+
+/* 🎮 Game Development mode: professional multi-file structure, guaranteed
+   mobile+PC optimization, and a high bar for sprite/3D asset quality. */
+const GAMEDEV_REQ = `\n\nGAME DEVELOPMENT MODE — build this like a professional game studio:
+- PROJECT STRUCTURE: organize the code into separate files — index.html (markup only), css/style.css (all styling), js/game.js (game logic; add js/engine.js if the engine/loop/input layer is substantial), and assets/*.svg or assets/*.gltf for art — linked with relative paths (<link href="css/style.css">, <script src="js/game.js">). Still NO ES module imports between your own files.
+- MOBILE + PC OPTIMIZED (both must be first-class): canvas sized to the viewport and scaled by devicePixelRatio for crisp rendering; handle resize AND orientation change; a delta-time requestAnimationFrame loop that stays smooth at any refresh rate; touch controls (on-screen buttons and/or swipe with touch-action:none, no scroll/zoom hijack, generous hit areas) AND keyboard controls (arrows/WASD/space) simultaneously; UI readable on a phone and sharp on a desktop monitor.
+- SPRITE / ART QUALITY: sprites must be genuine layered art — SVG assets or canvas vector drawing with gradients, shading, outlines, highlights and small idle/motion animations — NEVER plain untextured rectangles or emoji used as sprites. Consistent palette and visual style across all art.
+- 3D QUALITY (when 3D): three.js from CDN with detailed procedural geometry (generous segment counts, bevels/composition of shapes for real silhouettes), PBR materials (metalness/roughness, emissive accents), at least 2 lights plus shadows; any inline glTF must have correct normals and real PBR material definitions.
+- GAME FEEL: sound effects via WebAudio oscillators/noise (no external audio files), particle/impact feedback, screen shake or flashes where appropriate, difficulty curve, and persistent high score in localStorage.`;
 
 const DESIGN_PROMPT = `Analyze the attached image(s) so a developer can faithfully reproduce them in a web app. Be concrete and structured. Cover: color palette (list hex values), typography (font families/weights/sizes/hierarchy), layout & spacing (grid, alignment, sizing), key components/controls, iconography & imagery style, overall theme/mood (light or dark), and any ANIMATION/motion shown or implied (transitions, easing, duration, hover/scroll effects, loops). If it's a UI mockup, describe each screen region. Output a concise design brief — no code.`;
 
@@ -163,12 +172,14 @@ export function createBuilder(deps) {
       checklist = cl || []; arch = ar || "";
       save({});
     }
-    const isGame = GAME_RE.test(spec + " " + checklist.join(" "));
+    const gamedev = !!deps.store.gamedev;
+    const isGame = gamedev || GAME_RE.test(spec + " " + checklist.join(" "));
     const user = `Build this program:\n${spec}${ref}`
       + (checklist.length ? `\n\nIt MUST satisfy every item on this checklist:\n- ${checklist.join("\n- ")}` : "")
       + (arch ? `\n\nFollow this technical design (deviate only if it's clearly wrong):\n${arch}` : "")
       + (isGame ? GAME_REQ : "")
-      + `\n\nRemember: index.html entry point, self-contained, runs in the browser.`;
+      + (gamedev ? GAMEDEV_REQ : "")
+      + `\n\nRemember: index.html entry point${gamedev ? "" : ", self-contained"}, runs in the browser.`;
 
     // 2) Generate ALL remaining candidates CONCURRENTLY (same call count, ~the
     //    wall-clock of one), then evaluate them and keep the best.
@@ -404,6 +415,10 @@ export function createBuilder(deps) {
       const hasLoop = /requestAnimationFrame|setInterval/.test(codeAll);
       const hasInput = /(keydown|keyup|keypress|pointerdown|touchstart|onkeydown)/i.test(codeAll);
       add("Playable (game loop + controls)", hasLoop && hasInput, 20);
+      // both platforms must be first-class: touch AND keyboard handlers present
+      const hasTouch = /(touchstart|touchmove|pointerdown)/i.test(codeAll);
+      const hasKeys = /(keydown|keyup|onkeydown)/i.test(codeAll);
+      add("Mobile + PC controls (touch & keyboard)", hasTouch && hasKeys, 8);
     }
     const totW = metrics.reduce((s, m) => s + m.weight, 0) || 1;
     const gotW = metrics.reduce((s, m) => s + (m.pass ? m.weight : 0), 0);
@@ -501,9 +516,10 @@ export function createBuilder(deps) {
     if (!last) throw new Error("open or generate a program first, then request a change");
     const tier = activeTier();
     const ctx = atts.length ? await analyzeContext(atts, onStatus) : "";
-    const isGame = GAME_RE.test(lastSpec + " " + request);
+    const gamedev = !!deps.store.gamedev;
+    const isGame = gamedev || GAME_RE.test(lastSpec + " " + request);
     const filesBlock = Object.entries(last.files).map(([p, c]) => `===FILE: ${p}===\n${c}`).join("\n");
-    const user = `Current program:\n${filesBlock}\n\nRequested change:\n${request}${ctx ? `\n\nAttached references to use:${ctx}` : ""}${isGame ? GAME_REQ : ""}\n\nReturn the COMPLETE updated project.`;
+    const user = `Current program:\n${filesBlock}\n\nRequested change:\n${request}${ctx ? `\n\nAttached references to use:${ctx}` : ""}${isGame ? GAME_REQ : ""}${gamedev ? GAMEDEV_REQ : ""}\n\nReturn the COMPLETE updated project.`;
     onStatus?.("Applying change…");
     const raw = await deps.llmGenerate(EDITOR, user, {
       onToken: (_d, full) => onStatus?.(`Editing… ${full.length.toLocaleString()} chars`),

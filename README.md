@@ -116,6 +116,12 @@ it. Objects can also be strained by **exact numbers via chat or voice**: "stretc
 by 2.5 and y by 0.5", "scale to 1.2", "widen by 150%", "가로 2배로 늘려" — ACTIG
 applies it to the selected object and reads back the resulting X/Y/Z scale. Games built with Vibe Build are generated as **actually playable** games (real
 game loop, keyboard + touch controls, scoring, win/lose + restart), not screen mockups.
+**🎮 Game Development mode** (button, or say/type "game development mode" / "게임 개발
+모드") focuses every build and edit on games: a professional multi-file structure
+(index.html + css/ + js/ + assets/), high-detail sprites/3D (layered vector art or
+PBR three.js — never bare rectangles), and controls optimized for **both mobile and
+PC** (touch + keyboard, responsive DPR-aware canvas), enforced by a "Mobile + PC
+controls" eval check.
 
 **Gourmet mode 🍽, research, PC, and the JARVIS look.** Tap 🍽 (or say "gourmet
 mode" / any restaurant request) and ACTIG becomes a restaurant concierge: it uses

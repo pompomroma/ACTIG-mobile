@@ -39,6 +39,8 @@ const store = {
   set gourmet(v) { localStorage.setItem("actig.gourmet", v ? "1" : "0"); },
   get overdrive() { return localStorage.getItem("actig.overdrive") === "1"; },
   set overdrive(v) { localStorage.setItem("actig.overdrive", v ? "1" : "0"); },
+  get gamedev() { return localStorage.getItem("actig.gamedev") === "1"; },
+  set gamedev(v) { localStorage.setItem("actig.gamedev", v ? "1" : "0"); },
   // Primary language: "auto" (follow the user turn-by-turn), "en-US", or "ko-KR".
   get lang() { return localStorage.getItem("actig.lang") || "auto"; },
   set lang(v) { localStorage.setItem("actig.lang", v || "auto"); },
@@ -849,6 +851,15 @@ function setOverdrive(on) {
   setStatus(on ? "Overdrive 🚀 — builds run the deepest pipeline (slower, best results)" : "Overdrive off");
 }
 
+/* 🎮 Game Development mode — every build/edit is treated as a game: pro multi-file
+   structure (html/css/js/assets), mobile+PC controls, high-detail sprites/3D. */
+const GAMEDEV_RE = /\b(game\s*dev(elopment)?( mode)?|game mode)\b|게임\s*(개발|모드)/i;
+function setGameDev(on) {
+  store.gamedev = on;
+  const b = $("gamedevBtn"); if (b) b.classList.toggle("on", on);
+  setStatus(on ? "Game Development mode 🎮 — describe the game you want" : "Game Dev mode off");
+}
+
 /* Turn an HTTP failure into a clear, actionable line instead of a vague "offline". */
 function httpErrorMessage(status, body, lang) {
   if (status === 401 || status === 403)
@@ -916,6 +927,16 @@ async function submit(text, source, atts) {
             : "Overdrive engaged, sir. Builds and edits now run the deepest pipeline — architecture pass, four candidates, six repair rounds, and change verification. Slower, but the best I can produce."), lang, source);
   }
 
+  // Game Development mode 🎮 — toggle by command.
+  if (GAMEDEV_RE.test(low)) {
+    const off = /\b(off|end|exit|stop|disable)\b|꺼|끄|해제|종료/.test(low);
+    const ko = lang === "ko-KR";
+    setGameDev(!off);
+    return finish(off ? (ko ? "게임 개발 모드를 종료합니다." : "Game Development mode off.")
+      : (ko ? "게임 개발 모드 가동합니다. 어떤 게임이든 설명만 해주세요 — 모바일과 PC 모두에 최적화된, 제대로 된 구조의 게임으로 만들어 드릴게요."
+            : "Game Development mode engaged, sir. Describe any game — I'll build it with a professional file structure, high-detail art, and controls optimized for both mobile and PC."), lang, source);
+  }
+
   // Gourmet mode 🍽 — toggle by command; handle food requests with real local data.
   if (GOURMET_TOGGLE_RE.test(low)) {
     const off = /\b(off|end|exit|stop|disable)\b|꺼|끄|해제|종료/.test(low);
@@ -931,8 +952,10 @@ async function submit(text, source, atts) {
   }
 
   // Vibe Build — "build/make/create/generate a … app/website/game/3D/program".
+  // In Game Dev mode 🎮 any description (outside edit mode) is a game build spec.
   if (/\b(build|make|create|generate|develop|code)\b[\s\S]*\b(app|application|web ?app|web ?site|website|web ?page|page|site|game|program|tool|dashboard|landing|clone|3d|three ?d|model|viewer|simulation|visuali[sz]er)\b/.test(low)
-      || /^\s*vibe ?code\b/.test(low)) {
+      || /^\s*vibe ?code\b/.test(low)
+      || (store.gamedev && !buildEditMode && text)) {
     const spec = text.replace(/^\s*(please\s+)?(vibe ?code|build|make|create|generate|develop|code)\s+(me\s+)?(a|an|the)?\s*/i, "").trim() || text;
     clearBuildEditMode();
     runBuild(spec, source, lang, atts);
@@ -1284,6 +1307,8 @@ function boot() {
   $("buildNew").onclick = () => { clearBuildEditMode(); setStatus("Ready for a new build"); };
   $("overdriveBtn").onclick = () => setOverdrive(!store.overdrive);
   $("overdriveBtn").classList.toggle("on", store.overdrive);
+  $("gamedevBtn").onclick = () => setGameDev(!store.gamedev);
+  $("gamedevBtn").classList.toggle("on", store.gamedev);
   $("buildSave").onclick = async () => {
     const b = await ensureBuild().catch(() => null);
     if (!b || !b.hasProgram()) { addBubble("sys", "Generate or open a program first."); return; }
