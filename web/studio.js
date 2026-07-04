@@ -94,6 +94,12 @@ export async function createStudio(host) {
     plane.constant = -entity.position.z;
     if (ray.ray.intersectPlane(plane, hit)) { entity.position.x = hit.x; entity.position.y = hit.y; }
   }
+  /* World-space point on the entity's z-plane for an NDC coord (null if no hit). */
+  function ndcToWorld(entity, nx, ny) {
+    ptr.set(nx, ny); ray.setFromCamera(ptr, camera);
+    plane.constant = -entity.position.z;
+    return ray.ray.intersectPlane(plane, hit) ? { x: hit.x, y: hit.y } : null;
+  }
   function strainSelected(dx, dy, base) {           // dx,dy in NDC-ish units
     if (!selected) return;
     selected.scale.x = clamp(base.x * (1 + dx * 1.6), 0.1, 8);
@@ -199,7 +205,7 @@ export async function createStudio(host) {
 
   /* One-Euro filter: adaptive low-pass — heavy smoothing at low speed (kills
      jitter), light smoothing at high speed (kills lag). */
-  function oneEuro({ minCutoff = 1.4, beta = 0.25, dCutoff = 1.0 } = {}) {
+  function oneEuro({ minCutoff = 1.5, beta = 0.35, dCutoff = 1.0 } = {}) {
     let xP = null, dxP = 0, tP = 0;
     const alpha = (c, dt) => { const r = 2 * Math.PI * c * dt; return r / (r + 1); };
     const f = (x, t) => {
@@ -213,10 +219,12 @@ export async function createStudio(host) {
     f.reset = () => { xP = null; dxP = 0; };
     return f;
   }
-  const newHand = () => ({ pinch: false, x: 0, y: 0, wx: 0, wy: 0, seen: false, fx: oneEuro(), fy: oneEuro() });
+  const newHand = () => ({ pinch: false, x: 0, y: 0, wx: 0, wy: 0, vx: 0, vy: 0, pt: 0, seen: false, fx: oneEuro(), fy: oneEuro() });
   const H = [newHand(), newHand()];
   let grab = null, grabStartScale = new THREE.Vector3(), grabStart = { x: 0, y: 0 };
+  let grabWorld = null;                             // predicted world target, chased at render rate
   let two = null;                                   // two-hand strain session
+  const LEAD = 0.07;                                // seconds of velocity lead (cancels inference latency)
 
   async function toggleGestures() {
     gesturesOn = !gesturesOn;
@@ -225,8 +233,8 @@ export async function createStudio(host) {
     return gesturesOn;
   }
   async function startHands() {
-    const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs");
-    const fileset = await vision.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs");
+    const fileset = await vision.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm");
     handLandmarker = await vision.HandLandmarker.createFromOptions(fileset, {
       baseOptions: {
         modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
@@ -288,7 +296,12 @@ export async function createStudio(host) {
       // pinch point = thumb–index midpoint (steadier than the fingertip alone)
       const px = (tip.x + thumb.x) / 2, py = (tip.y + thumb.y) / 2;
       const nx = 1 - 2 * px, ny = 1 - 2 * py;          // mirror + to NDC
+      const oxp = h.x, oyp = h.y, wasSeen = h.seen, opt = h.pt;
       h.x = h.fx(nx, now); h.y = h.fy(ny, now);        // One-Euro adaptive smoothing
+      const dts = Math.max((now - opt) / 1000, 1e-3);  // velocity for latency prediction
+      h.vx = wasSeen ? (h.x - oxp) / dts : 0;
+      h.vy = wasSeen ? (h.y - oyp) / dts : 0;
+      h.pt = now;
       h.seen = true;
       const span = Math.hypot(wrist.x - mcp.x, wrist.y - mcp.y) || 1e-3;
       const ratio = Math.hypot(thumb.x - tip.x, thumb.y - tip.y) / span;
@@ -298,7 +311,7 @@ export async function createStudio(host) {
 
     // Two hands pinched → strain the selected object by their spread.
     if (p0 && p1 && selected) {
-      grab = null;
+      grab = null; grabWorld = null;
       const dx = Math.abs(H[0].x - H[1].x), dy = Math.abs(H[0].y - H[1].y), dist = Math.hypot(dx, dy);
       if (!two) two = { dx: dx || 1e-3, dy: dy || 1e-3, dist: dist || 1e-3, scale: selected.scale.clone() };
       else if (stretchMode) {
@@ -311,18 +324,23 @@ export async function createStudio(host) {
     }
     two = null;
 
-    // One hand pinched → select+grab, then drag or strain.
+    // One hand pinched → select+grab, then drag or strain. The drag itself only
+    // SETS a velocity-led target here; the render loop chases it every frame, so
+    // motion runs at display rate (60–120fps) instead of camera/inference rate.
     if (p0) {
       if (!grab) {                                     // pinch just started → pick under fingertip
         const entity = pickAt(H[0].x, H[0].y);
-        if (entity) { select(entity); grab = entity; grabStartScale.copy(entity.scale); grabStart = { x: H[0].x, y: H[0].y }; }
+        if (entity) { select(entity); grab = entity; grabStartScale.copy(entity.scale); grabStart = { x: H[0].x, y: H[0].y }; grabWorld = null; }
       } else if (stretchMode) {
         strainSelected(H[0].x - grabStart.x, H[0].y - grabStart.y, grabStartScale);
+        grabWorld = null;
       } else {
-        moveEntityToNdc(grab, H[0].x, H[0].y);
+        const lead = (v) => clamp(v * LEAD, -0.12, 0.12);          // predict past inference latency
+        const w = ndcToWorld(grab, H[0].x + lead(H[0].vx), H[0].y + lead(H[0].vy));
+        if (w) grabWorld = w;
       }
     } else {
-      grab = null;
+      grab = null; grabWorld = null;
     }
   }
 
@@ -331,7 +349,17 @@ export async function createStudio(host) {
     renderer.setSize(host.clientWidth, host.clientHeight);
   });
 
-  (function animate() { requestAnimationFrame(animate); renderer.render(scene, camera); })();
+  // Render loop: hand-drag interpolation runs HERE at display rate (60–120fps) —
+  // the grabbed object glides toward the latest predicted target every frame,
+  // decoupling drag smoothness from the camera/inference frame rate.
+  (function animate() {
+    requestAnimationFrame(animate);
+    if (grab && grabWorld) {
+      grab.position.x += (grabWorld.x - grab.position.x) * 0.45;
+      grab.position.y += (grabWorld.y - grab.position.y) * 0.45;
+    }
+    renderer.render(scene, camera);
+  })();
 
   spawn("box");
   return { spawn, clone, remove, toggleGestures, toggleStretch, beginAttach, submitAttach, mergeSelected, exportGLB };

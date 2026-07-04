@@ -108,7 +108,9 @@ quality depends on the active model; without vision the image is still embedded.
 modeling. **🔗 Attach** → tap objects you've dragged together → **✅ Submit** binds
 them into a group; **🧊 Mesh** merges the group into one solid. **⬇ Export** downloads
 the whole project as a **`.glb`** file. **✋ Gestures** enables camera hand control
-(1080p60 + GPU + frame-synced tracking, two-hand identity-locked, One-Euro filtered): pinch over an object to
+(1080p60 + GPU + frame-synced tracking, two-hand identity-locked, One-Euro filtered,
+velocity-predicted, with the drag interpolated at display rate — 60–120fps motion
+regardless of camera/inference speed): pinch over an object to
 select and drag it, and — with Stretch on — pinch-drag (or two-hand spread) to strain
 it. Games built with Vibe Build are generated as **actually playable** games (real
 game loop, keyboard + touch controls, scoring, win/lose + restart), not screen mockups.
