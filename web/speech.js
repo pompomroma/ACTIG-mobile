@@ -3,19 +3,22 @@
    transcribes on-device with Whisper via transformers.js — no API key, runs in
    the browser. The model (~tens of MB) downloads once and is cached. */
 
-let asrPipe = null, loading = null;
+/* Pipelines are cached per model id. whisper-tiny is the fast default;
+   whisper-base is used when Korean is active — noticeably better Hangul. */
+const DEFAULT_ASR = "Xenova/whisper-tiny";
+const pipes = {};    // modelId -> pipeline | Promise<pipeline>
 
-async function getPipe(onStatus) {
-  if (asrPipe) return asrPipe;
-  if (loading) return loading;
+async function getPipe(onStatus, model = DEFAULT_ASR) {
+  if (pipes[model]) return pipes[model];
   onStatus?.("Loading speech model… (first time only)");
-  loading = (async () => {
+  pipes[model] = (async () => {
     const t = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.3");
     t.env.allowLocalModels = false;
-    asrPipe = await t.pipeline("automatic-speech-recognition", "Xenova/whisper-tiny", { dtype: "q8" });
-    return asrPipe;
+    const p = await t.pipeline("automatic-speech-recognition", model, { dtype: "q8" });
+    pipes[model] = p;
+    return p;
   })();
-  return loading;
+  return pipes[model];
 }
 
 /* Decode a recorded Blob to mono Float32 @16 kHz for Whisper. */
@@ -40,8 +43,8 @@ async function blobToMono16k(blob) {
   return out;
 }
 
-export async function transcribeBlob(blob, lang, onStatus) {
-  const pipe = await getPipe(onStatus);
+export async function transcribeBlob(blob, lang, onStatus, model) {
+  const pipe = await getPipe(onStatus, model);
   const audio = await blobToMono16k(blob);
   onStatus?.("Transcribing…");
   const opts = { chunk_length_s: 30 };
@@ -90,9 +93,9 @@ export async function startRecording({ maxMs = 8000, onStatus } = {}) {
 
 /* Pre-load the Whisper pipeline (and prime it with a beat of silence) so the
    FIRST spoken turn doesn't pay the model-load + compile cost. Fire-and-forget. */
-export async function warmup(onStatus) {
+export async function warmup(onStatus, model) {
   try {
-    const pipe = await getPipe(onStatus);
+    const pipe = await getPipe(onStatus, model);
     await pipe(new Float32Array(16000), { chunk_length_s: 30 });   // 1s of silence primes kernels
   } catch {}
 }

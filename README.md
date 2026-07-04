@@ -145,7 +145,12 @@ ACTIG replies in native-level Korean (해요체, no translationese), speaks with
 best Korean system voice (Yuna preferred) at natural pace, recognizes Korean speech
 accurately (Whisper gets a Korean hint instead of auto-detect), greets in Korean
 ("액티그, 대기 중입니다"), and understands Korean wake ("일어나 액티그") and mode
-commands (미식 모드, 오버드라이브). (As always: model
+commands (미식 모드, 오버드라이브, 게임 개발 모드). When Korean is active, speech
+recognition upgrades to **whisper-base** (much better Hangul than tiny; one-time
+extra download, still on-device/free), Korean build/edit/research commands are
+recognized natively ("스네이크 게임 만들어줘", "배경 바꿔줘", "비교해줘"), and any
+reply containing Hangul is always spoken with the best Korean voice available
+(Yuna/Google 한국의/SunHi), never an English voice. (As always: model
 benchmark scores and hardware TOPS are fixed properties and are not — cannot be —
 changed by the app; quality gains come from real data, search grounding, and prompts.)
 

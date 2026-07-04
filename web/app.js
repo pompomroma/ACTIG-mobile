@@ -131,6 +131,12 @@ function sttHint() {
   if (store.lang === "en-US") return "en";
   return lastLang === "ko-KR" ? "ko" : "auto";
 }
+/* Whisper model choice: when Korean is active use whisper-base — noticeably
+   better Hangul recognition than tiny (bigger one-time download, still free
+   and on-device). English/auto stays on the fast tiny model. */
+function sttModel() {
+  return (store.lang === "ko-KR" || lastLang === "ko-KR") ? "Xenova/whisper-base" : undefined;
+}
 
 /* ---------- text to speech ---------- */
 function speak(text, lang) {
@@ -142,16 +148,17 @@ function speak(text, lang) {
    Known high-quality system voices are preferred by name — Yuna is Apple's best
    Korean voice; Samantha/Ava/Daniel are strong English ones. */
 const VOICE_PREF = {
-  ko: ["yuna", "sora", "suhyun", "jian"],
+  // Apple (Yuna is the best Korean voice), Google ("…한국의…"), Microsoft (SunHi/Heami/InJoon)
+  ko: ["yuna", "sora", "suhyun", "jian", "한국", "korean", "sunhi", "heami", "injoon", "nuri", "minsu"],
   en: ["samantha", "ava", "allison", "daniel", "karen"],
 };
 let voiceCache = {};
 function bestVoice(lang) {
   if (!("speechSynthesis" in window)) return null;
-  if (voiceCache[lang] !== undefined) return voiceCache[lang];
+  if (voiceCache[lang]) return voiceCache[lang];      // never cache a miss — voices load async
   const all = speechSynthesis.getVoices() || [];
   const base = (lang || "en-US").split("-")[0];
-  const cands = all.filter(v => v.lang && v.lang.toLowerCase().startsWith(base));
+  const cands = all.filter(v => v.lang && v.lang.toLowerCase().replace("_", "-").startsWith(base));
   const names = VOICE_PREF[base] || [];
   const rank = (v) => {
     const n = v.name.toLowerCase();
@@ -161,7 +168,9 @@ function bestVoice(lang) {
       + (v.lang.toLowerCase() === (lang || "").toLowerCase() ? 2 : 0) + (v.localService ? 1 : 0);
   };
   cands.sort((a, b) => rank(b) - rank(a));
-  return (voiceCache[lang] = cands[0] || null);
+  const found = cands[0] || null;
+  if (found) voiceCache[lang] = found;
+  return found;
 }
 if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => { voiceCache = {}; };
 
@@ -173,6 +182,9 @@ function speakQueued(text, lang) {
   if (!t) return;
   const u = new SpeechSynthesisUtterance(t);
   u.lang = lang || "en-US";
+  // Hangul in the text is decisive: always speak it with the Korean voice, even
+  // if the request language was detected as something else.
+  if (/[가-힣]/.test(t)) u.lang = "ko-KR";
   const v = bestVoice(u.lang); if (v) u.voice = v;
   // Korean sounds most natural at neutral pace; English slightly brisk.
   u.rate = u.lang.startsWith("ko") ? 1.0 : 1.04;
@@ -348,7 +360,7 @@ function startMic(stream) {
   } else {
     listenStream = stream;
     analyser = makeAnalyser(stream);            // for silence detection (auto end-of-turn)
-    speech().then(sp => sp.warmup?.()).catch(() => {});  // pre-load Whisper so turn 1 is fast
+    speech().then(sp => sp.warmup?.(undefined, sttModel())).catch(() => {});  // pre-load Whisper so turn 1 is fast
     listenLoop(stream);                         // iOS: continuous on-device Whisper loop
   }
 }
@@ -416,7 +428,7 @@ async function listenLoop(stream) {
       if (!heard) continue;                            // window passed in silence — listen again
       if (awake) reflexAck(prefLang());                // react INSTANTLY while we transcribe/think
       setStatus("Transcribing…");
-      text = await sp.transcribeBlob(blob, sttHint(), setStatus);
+      text = await sp.transcribeBlob(blob, sttHint(), setStatus, sttModel());
       if (/[가-힣]/.test(text)) lastLang = "ko-KR";     // keep the language sticky for the next turn
     } catch (e) {
       recording = null;
@@ -689,7 +701,7 @@ async function pollinationsGenerate(system, user, model, onToken) {
    Research-style questions are routed to the free SEARCH-GROUNDED model
    ("searchgpt" on the keyless default) with a structured research prompt —
    real web-grounded answers instead of memory-only ones. */
-const RESEARCH_RE = /\b(research|investigate|deep ?dive|explain|compare|versus|vs\.?|history of|science of|analy[sz]e|why (is|are|do|does|did)|how (does|do|did|is|are)|what (is|are|was|were) the|latest|current|news about|stat(istic)?s|prove|evidence|difference between)\b/i;
+const RESEARCH_RE = /\b(research|investigate|deep ?dive|explain|compare|versus|vs\.?|history of|science of|analy[sz]e|why (is|are|do|does|did)|how (does|do|did|is|are)|what (is|are|was|were) the|latest|current|news about|stat(istic)?s|prove|evidence|difference between)\b|조사해|검색해|알아봐|설명해|비교해|분석해|최신|뉴스|근거|차이점?이?\s*뭐/i;
 function researchPrompt(lang) {
   return `You are ACTIG's research engine. Give an accurate, well-structured answer in ${lang}: lead with the direct answer, then key facts with concrete numbers/dates, note significant disagreement or uncertainty, and name your sources (publication/site names) at the end. Be thorough but tight — no filler.`;
 }
@@ -955,6 +967,7 @@ async function submit(text, source, atts) {
   // In Game Dev mode 🎮 any description (outside edit mode) is a game build spec.
   if (/\b(build|make|create|generate|develop|code)\b[\s\S]*\b(app|application|web ?app|web ?site|website|web ?page|page|site|game|program|tool|dashboard|landing|clone|3d|three ?d|model|viewer|simulation|visuali[sz]er)\b/.test(low)
       || /^\s*vibe ?code\b/.test(low)
+      || (/(게임|앱|어플|웹\s*(사이트|앱|페이지)?|사이트|페이지|프로그램|도구|대시보드)[\s\S]*(만들|생성|제작|개발해|코딩해)/.test(text) )
       || (store.gamedev && !buildEditMode && text)) {
     const spec = text.replace(/^\s*(please\s+)?(vibe ?code|build|make|create|generate|develop|code)\s+(me\s+)?(a|an|the)?\s*/i, "").trim() || text;
     clearBuildEditMode();
@@ -980,7 +993,8 @@ async function submit(text, source, atts) {
 
   // Adjust the loaded program — when a saved/loaded program is active and the
   // message reads like an edit instruction, apply it instead of chatting.
-  if (buildEditMode && (atts.length || /\b(add|change|make it|make the|remove|delete|adjust|edit|update|modify|set (the|it)|rename|replace|turn .* into|fix|increase|decrease|resize|recolor|restyle|move|swap|instead|also add|also make|match|like this|this design|this style)\b/i.test(low))) {
+  if (buildEditMode && (atts.length || /\b(add|change|make it|make the|remove|delete|adjust|edit|update|modify|set (the|it)|rename|replace|turn .* into|fix|increase|decrease|resize|recolor|restyle|move|swap|instead|also add|also make|match|like this|this design|this style)\b/i.test(low)
+      || /(바꿔|바꾸|추가|삭제|지워|수정|변경|고쳐|교체|넣어|빼|옮겨|키워|줄여)/.test(text))) {
     runAdjust(text || "Apply the attached reference(s) to the current program.", source, atts);
     return;
   }
