@@ -43,13 +43,37 @@ async function blobToMono16k(blob) {
   return out;
 }
 
+/* Whisper wants full language names; map codes defensively. */
+const LANG_NAMES = { ko: "korean", "ko-kr": "korean", en: "english", "en-us": "english", ja: "japanese", zh: "chinese", fr: "french" };
+
+/* Pick a pipeline without ever hanging a turn: if the wanted model is loaded use
+   it; otherwise start loading it in the background and serve this turn with the
+   already-loaded default (tiny). Only block when NOTHING is loaded yet. */
+async function pickPipe(onStatus, model) {
+  const want = model || DEFAULT_ASR;
+  const w = pipes[want];
+  if (w && !(w instanceof Promise)) return w;
+  if (want !== DEFAULT_ASR) {
+    getPipe(undefined, want).catch(() => {});          // upgrade in background
+    const d = pipes[DEFAULT_ASR];
+    if (d && !(d instanceof Promise)) return d;        // serve this turn with tiny
+    if (d instanceof Promise) return d;
+  }
+  return getPipe(onStatus, want);
+}
+
 export async function transcribeBlob(blob, lang, onStatus, model) {
-  const pipe = await getPipe(onStatus, model);
+  const pipe = await pickPipe(onStatus, model);
   const audio = await blobToMono16k(blob);
   onStatus?.("Transcribing…");
-  const opts = { chunk_length_s: 30 };
-  if (lang && lang !== "auto") opts.language = lang.split("-")[0]; // e.g. "ko"
-  const out = await pipe(audio, opts);
+  const opts = { chunk_length_s: 30, task: "transcribe" };
+  if (lang && lang !== "auto") {
+    const k = String(lang).toLowerCase();
+    opts.language = LANG_NAMES[k] || LANG_NAMES[k.split("-")[0]] || k;
+  }
+  let out;
+  try { out = await pipe(audio, opts); }
+  catch { out = await pipe(audio, { chunk_length_s: 30 }); }   // bad language opt → retry plain
   return (out.text || "").trim();
 }
 

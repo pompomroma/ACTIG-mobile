@@ -188,8 +188,19 @@ function speakQueued(text, lang) {
   const v = bestVoice(u.lang); if (v) u.voice = v;
   // Korean sounds most natural at neutral pace; English slightly brisk.
   u.rate = u.lang.startsWith("ko") ? 1.0 : 1.04;
+  // CRITICAL: if an utterance dies without onend (a WebKit habit, especially
+  // with non-default voices), `speaking` must never stay stuck true — a stuck
+  // flag silently blocks the mic loop forever. Belt (onerror) + suspenders
+  // (a duration-based watchdog that force-clears the flag).
+  let guard = 0;
   u.onstart = () => { speaking = true; };
-  u.onend = () => { speaking = false; };
+  u.onend = () => { clearTimeout(guard); speaking = false; };
+  u.onerror = () => { clearTimeout(guard); speaking = false; };
+  guard = setTimeout(() => {
+    if (!speechSynthesis.speaking) speaking = false;             // utterance died silently
+    else setTimeout(() => { speaking = false; }, 8000);          // wedged engine: hard cap
+  }, Math.min(20000, 4000 + t.length * 90));
+  try { speechSynthesis.resume(); } catch {}          // WebKit can wedge in 'paused'
   speechSynthesis.speak(u);
 }
 /* Length up to and including the last sentence terminator (so we only speak
@@ -429,7 +440,10 @@ async function listenLoop(stream) {
       if (awake) reflexAck(prefLang());                // react INSTANTLY while we transcribe/think
       setStatus("Transcribing…");
       text = await sp.transcribeBlob(blob, sttHint(), setStatus, sttModel());
-      if (/[가-힣]/.test(text)) lastLang = "ko-KR";     // keep the language sticky for the next turn
+      if (/[가-힣]/.test(text)) {
+        if (lastLang !== "ko-KR") sp.warmup?.(undefined, "Xenova/whisper-base"); // pre-load the better Korean model
+        lastLang = "ko-KR";                             // keep the language sticky for the next turn
+      }
     } catch (e) {
       recording = null;
       if (!micOn || listenAbort) break;
@@ -1269,6 +1283,9 @@ function boot() {
   $("buildModel").value = store.buildModel; $("ghToken").value = store.ghToken;
   $("buildQuality").value = store.quality; $("langPref").value = store.lang;
   if (store.lang !== "auto") lastLang = store.lang;
+  // Korean preference → download/prime the better Korean STT model up front,
+  // so no voice turn ever stalls on a mid-conversation model download.
+  if (store.lang === "ko-KR") speech().then(sp => sp.warmup?.(undefined, "Xenova/whisper-base")).catch(() => {});
   $("saveKey").onclick = () => {
     store.key = $("apiKey").value;
     store.model = $("model").value;
@@ -1278,6 +1295,7 @@ function boot() {
     store.quality = $("buildQuality").value;
     store.lang = $("langPref").value;
     if (store.lang !== "auto") lastLang = store.lang;
+    if (store.lang === "ko-KR") speech().then(sp => sp.warmup?.(undefined, "Xenova/whisper-base")).catch(() => {});
     store.offline = $("preferOffline").checked;
     $("model").value = store.model; $("endpoint").value = store.endpoint; // reflect defaults
     setStatus("Saved");
