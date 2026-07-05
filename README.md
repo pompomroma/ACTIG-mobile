@@ -65,7 +65,7 @@ in the Keychain, never in source.
 
 Zero setup, no GitHub settings, **no API key**: open this in **Safari → Share →
 Add to Home Screen** —
-**https://raw.githack.com/pompomroma/ACTIG-mobile/067b25a0b16629e83a3827168a438552a7c98cd6/web/index.html**
+**https://raw.githack.com/pompomroma/ACTIG-mobile/feb21d691f70a937f8b8869e0575ebf81e2587c8/web/index.html**
 (served straight from the repo by a free CDN; the long code is a commit hash, used
 because the working branch name contains slashes that CDNs can't parse). No PC, no Apple account, no
 signing, no key. The AI answers immediately via a free, browser-friendly brain.
@@ -125,8 +125,11 @@ controls" eval check.
 
 **Gourmet mode 🍽, research, PC, and the JARVIS look.** Tap 🍽 (or say "gourmet
 mode" / any restaurant request) and ACTIG becomes a restaurant concierge: it uses
-your device location (with permission) — or any area you name — pulls **real nearby
-venues from OpenStreetMap**, ranks them against every detail of your request, and
+your device location (with permission) — **or any area you name** ("find a sushi place
+**in Shibuya**", "steakhouses **near Times Square**", "**강남에서** 맛집 찾아줘"): when you
+name a place it geocodes that place and searches there instead of your GPS location — it
+pulls **real nearby venues from OpenStreetMap**, ranks them against every detail of your
+request, and
 asks follow-up option chips when it needs more (cuisine, budget, vibe). Attach a
 **food photo** (📎) to a gourmet request and ACTIG analyzes the dish — cuisine,
 ingredients, and plating **quality tier** — and matches nearby venues serving food
