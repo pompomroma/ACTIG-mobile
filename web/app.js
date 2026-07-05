@@ -752,10 +752,27 @@ async function researchLLM(history, lang, onToken) {
 const GOURMET_TOGGLE_RE = /\bgourmet mode\b|(미식|구르메|고메)\s*모드/i;
 const GOURMET_REQ_RE = /\b(restaurant|places? to eat|somewhere to eat|dinner|lunch spot|brunch|food (spot|place)|eatery|bistro|izakaya|sushi place|steakhouse|michelin|맛집|식당|レストラン|餐厅|餐廳)\b/i;
 
+/* Pull an explicit place-name out of the request so gourmet mode can search THERE
+   instead of the user's GPS location. Handles English preposition phrases
+   ("in/near/around/close to <place>"), trailing "<place> restaurants", and Korean
+   place particles ("<place>에서/에/근처/주변"). Returns "" when the user means "here"
+   (falls back to geolocation). */
+const NOT_A_PLACE = /^(me|here|my area|the area|town|the city|nearby|around here|somewhere|home|my place|this area|the neighou?rhood|어딘가|여기|이곳|근처|주변|우리\s*동네)$/i;
+const PLACE_TRAIL = /\s+(?:some|a|an|the|any|good|nice|best|great|cheap|new|top|really|very)$/i;
 function extractArea(text) {
-  const m = text.match(/\b(?:in|near|at|around)\s+([\p{L}][\p{L}\d\s.,'-]{2,40}?)(?=[.,!?]|$| for | with | that | tonight| today| tomorrow)/iu);
-  const area = m ? m[1].trim() : "";
-  return /^(me|here|my area|the area|town|the city)$/i.test(area) ? "" : area;
+  if (!text) return "";
+  // Korean: "<place>에서 / <place>에 / <place> 근처 / <place> 주변 / <place>쪽" — capture the place.
+  const ko = text.match(/([\p{L}\d][\p{L}\d\s·]{0,30}?)\s*(?:에서|에|부근|근처|주변|쪽)(?=\s|$|[,.!?]|[\p{L}])/u);
+  if (ko) {
+    const a = ko[1].trim();
+    if (a && !NOT_A_PLACE.test(a)) return a;
+  }
+  // English, preposition-led: "in / near / around / at / close to / by / over in <place>".
+  let m = text.match(/\b(?:in|near|around|at|close to|nearby|by|over in|out in|down in|up in)\s+([\p{L}][\p{L}\d\s.,'’-]{1,40}?)(?=[,.!?]|$|\s+(?:for|with|that|tonight|today|tomorrow|this|next|serving|please|area|when)\b)/iu);
+  // English, trailing: "<Place> restaurants / eateries / food / dining / eats".
+  if (!m) m = text.match(/\b([\p{Lu}][\p{L}\d\s.'’-]{1,40}?)\s+(?:restaurants?|eateries|food|dining|eats|cuisine)\b/u);
+  let area = m ? m[1].trim().replace(PLACE_TRAIL, "").trim() : "";
+  return NOT_A_PLACE.test(area) ? "" : area;
 }
 const geoPosition = () => new Promise((res, rej) => {
   if (!navigator.geolocation) return rej(new Error("no geolocation"));
@@ -813,16 +830,22 @@ async function runGourmet(text, lang, source, atts = [], acked = false) {
   const noteTexts = atts.filter(a => a.kind === "text" && a.text).map(a => `${a.name}:\n${a.text.slice(0, 4000)}`);
   const fullRequest = text + (noteTexts.length ? `\n\nAttached requirement notes:\n${noteTexts.join("\n\n")}` : "");
 
-  setStatus("Gourmet: locating…");
   let lat, lon, label = "";
   const area = extractArea(text);
   try {
-    if (area) ({ lat, lon, label } = await geocodeArea(area));
-    else { const c = await geoPosition(); lat = c.latitude; lon = c.longitude; label = await reverseGeocode(lat, lon); }
+    if (area) {
+      // The user named a place → geocode and search THERE (never their GPS location).
+      setStatus(`Gourmet: locating ${area}…`);
+      ({ lat, lon, label } = await geocodeArea(area));
+    } else {
+      // No place named → use the device's current location.
+      setStatus("Gourmet: finding you…");
+      const c = await geoPosition(); lat = c.latitude; lon = c.longitude; label = await reverseGeocode(lat, lon);
+    }
   } catch {}
   let list = [];
   if (lat !== undefined) {
-    setStatus("Gourmet: scanning nearby places…");
+    setStatus(`Gourmet: scanning places in ${label || area}…`);
     try { list = await nearbyRestaurants(lat, lon); } catch {}
   }
   if (!label) label = area || "the user's area (location unavailable — ask them where they are)";
