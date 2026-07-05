@@ -65,7 +65,7 @@ in the Keychain, never in source.
 
 Zero setup, no GitHub settings, **no API key**: open this in **Safari → Share →
 Add to Home Screen** —
-**https://raw.githack.com/pompomroma/ACTIG-mobile/3ddfbc190c0b0dd0ccf5fac70ebea5944c51df3d/web/index.html**
+**https://raw.githack.com/pompomroma/ACTIG-mobile/067b25a0b16629e83a3827168a438552a7c98cd6/web/index.html**
 (served straight from the repo by a free CDN; the long code is a commit hash, used
 because the working branch name contains slashes that CDNs can't parse). No PC, no Apple account, no
 signing, no key. The AI answers immediately via a free, browser-friendly brain.
@@ -153,6 +153,20 @@ reply containing Hangul is always spoken with the best Korean voice available
 (Yuna/Google 한국의/SunHi), never an English voice. (As always: model
 benchmark scores and hardware TOPS are fixed properties and are not — cannot be —
 changed by the app; quality gains come from real data, search grounding, and prompts.)
+
+**Exam strategy mode 🎯.** Tap 🎯 (or say/type "exam strategy mode" / "시험 전략 모드")
+and ACTIG becomes a ruthless, score-maximizing test strategist. Attach your exam
+sheet — **photos** (vision-transcribed question by question) or **text/PDF-pasted
+files** (📎) — and tell it your constraints (time limit, negative marking, sections),
+and it returns a pure score-max plan: a **triage + time budget** (solve-now / quick-win
+/ skip-and-guess / return-later), **worked answers with confidence** for what's solvable,
+the **highest-EV strategic guess** for the rest using legitimate test-design/format
+heuristics (elimination, answer-pattern/length tells, absolute-word cues, backsolving,
+facts leaked by other questions), and **global tactics** (attempt order, negative-marking
+math on when a guess is +EV, partial-credit farming). It focuses purely on getting the
+answer right — no "you should study properly" lecturing — and runs an Overdrive-parity
+two-pass analyze→refine (12k-token budget, same free model). Works by voice and text;
+scoped to the test's own content and format.
 
 **Quality pipeline (no extra cost, same model).** Higher output quality comes from
 *inference-time* technique, not from changing the model or paying: Vibe Build can
