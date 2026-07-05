@@ -41,6 +41,8 @@ const store = {
   set overdrive(v) { localStorage.setItem("actig.overdrive", v ? "1" : "0"); },
   get gamedev() { return localStorage.getItem("actig.gamedev") === "1"; },
   set gamedev(v) { localStorage.setItem("actig.gamedev", v ? "1" : "0"); },
+  get examstrat() { return localStorage.getItem("actig.examstrat") === "1"; },
+  set examstrat(v) { localStorage.setItem("actig.examstrat", v ? "1" : "0"); },
   // Primary language: "auto" (follow the user turn-by-turn), "en-US", or "ko-KR".
   get lang() { return localStorage.getItem("actig.lang") || "auto"; },
   set lang(v) { localStorage.setItem("actig.lang", v || "auto"); },
@@ -903,6 +905,88 @@ function setGameDev(on) {
   setStatus(on ? "Game Development mode 🎮 — describe the game you want" : "Game Dev mode off");
 }
 
+/* ---------- exam strategy mode 🎯 ----------
+   Analyzes an uploaded exam (photos + text files) and returns pure SCORE-MAXIMIZING
+   strategy — when/where/how to solve vs. guess, time allocation, elimination, and the
+   legitimate test-design/format heuristics that raise expected score. No educational
+   lecturing. Runs at Overdrive-parity effort: a big token budget + a two-pass
+   analyze→refine on the same free model. */
+const EXAM_RE = /\b(exam ?strateg(y|ies)|test ?strateg(y|ies)|exam mode|test mode)\b|시험\s*(전략|모드)|수능\s*전략/i;
+/* Vision brief: transcribe the sheet exactly so the strategist has the real questions. */
+const EXAM_VISION = `You are transcribing an EXAM sheet for a test strategist. Read the image(s) and output, VERBATIM and completely: every question with its number; all answer choices (letter/number + full text) for each; each question's point/mark value if shown; the exam's total time, section breakdown, and any scoring rules (e.g. negative marking, partial credit) if printed anywhere. Preserve order. Do NOT solve anything — only transcribe. If some text is unreadable, mark it [unclear]. Plain text, no commentary.`;
+/* Strategist system prompt: answer-focused, directive, no moralizing. Guardrail kept
+   internal (strategy on the test's own content/format only). */
+const EXAM_SYS = `You are ACTIG in EXAM STRATEGY MODE — a ruthless score-maximizing test strategist. Reply in {LANG}. Your ONLY objective is to MAXIMIZE the user's expected score on THIS exam. Be concrete, directive, and tactical. Do NOT lecture about studying properly, academic integrity, or "you shouldn't guess" — never moralize; the user has already decided their approach and wants the highest-EV plan.
+
+Given the exam content and the user's constraints (time limit, scoring/negative-marking, sections, their strengths), produce:
+1. TRIAGE + TIME PLAN — sort every question into solve-now / quick-win / skip-and-guess / return-later, with a concrete minute budget per section and the order to attempt them in for maximum points-per-minute.
+2. WORKED ANSWERS — for each question you can solve, give the answer and a one-line justification, plus a confidence level (high/med/low).
+3. HIGHEST-EV GUESSES — for the rest, give the single best strategic guess using elimination and legitimate test-design/format heuristics (answer-length & pattern tells, absolute words like "always/never" usually false, "all/none of the above" odds, backsolving by plugging answer choices in, using facts leaked by other questions on the sheet, grid-in reasonable-range picks). State the pick as the highest-EV choice, not "I don't know".
+4. GLOBAL TACTICS — attempt order, when to cut losses and guess vs. keep solving, exact negative-marking math (only guess when EV of guessing > 0), and partial-credit farming (write the setup/formula/units to grab marks even when unsure of the final number).
+
+Rules: give the actual answers/picks — never withhold them. No "study more" filler. Keep it tight and scannable (headers + short lines), spoken-friendly. Use ONLY the exam's own content and format — do not advise defeating proctoring, impersonating anyone, or obtaining leaked/stolen answer keys.`;
+async function runExam(text, lang, source, atts = [], acked = false) {
+  if (source === "voice" && !acked) { try { speechSynthesis.cancel(); } catch {} reflexAck(lang); consumeAck(); }
+  // Transcribe exam photo(s) so the strategist works from the real questions.
+  let examSheet = "";
+  const imgs = atts.filter(a => a.kind === "image" && a.dataUrl);
+  if (imgs.length) {
+    setStatus("Exam: reading the sheet…");
+    try { examSheet = (await visionDescribe(imgs, EXAM_VISION) || "").trim(); } catch {}
+  }
+  // Attached text files (typed question lists, scoring rules) are the exam too.
+  const noteTexts = atts.filter(a => a.kind === "text" && a.text).map(a => `${a.name}:\n${a.text.slice(0, 8000)}`);
+  if (noteTexts.length) examSheet += (examSheet ? "\n\n" : "") + noteTexts.join("\n\n");
+
+  const sys = EXAM_SYS.replace("{LANG}", lang);
+  const userMsg = (examSheet ? `EXAM SHEET (transcribed):\n${examSheet}\n\n` : "")
+    + `USER REQUEST / CONSTRAINTS: ${text || "Give me the full score-maximizing strategy for this exam."}`
+    + (examSheet ? "" : "\n(No exam content was attached — ask the user to attach a photo or paste the questions, and meanwhile give the general highest-EV test-taking tactics.)");
+
+  const bubble = addBubble("ai", "");
+  bubble.classList.add("thinking");
+  // PASS 1 — full analysis (streamed visually; not yet spoken).
+  setStatus("Exam: building your strategy…");
+  let pass1;
+  const showOnly = (_d, full) => { bubble.classList.remove("thinking"); setBubbleText(bubble, parseStructured(full).text); };
+  try { pass1 = await llmGenerate(sys, userMsg, { onToken: showOnly, maxTokens: 12000, temperature: 0.2 }); }
+  catch (e) { pass1 = ""; }
+  if (!pass1 || !pass1.trim()) {
+    const msg = "⚠️ Exam strategy failed to generate. Attach the exam sheet (photo or text) and try again.";
+    bubble.classList.remove("thinking"); setBubbleText(bubble, msg);
+    messages.push({ role: "assistant", text: msg }); persist();
+    setStatus("Exam strategy 🎯"); return;
+  }
+  // PASS 2 — refine at Overdrive-parity effort: fix wrong answers, maximize EV, tighten.
+  setStatus("Exam: tightening for maximum score…");
+  const refineSys = sys + "\n\nYou are REFINING a draft strategy. Re-check every worked answer and fix any that are wrong; upgrade weak guesses to the true highest-EV pick; sharpen the triage/time plan; remove any hedging or filler. Return the COMPLETE improved strategy only.";
+  let spoken = 0;
+  const onToken = (_d, full) => {
+    const shown = parseStructured(full).text;
+    setBubbleText(bubble, shown);
+    if (source === "voice") {
+      const pending = shown.slice(spoken); const end = speakableChunk(pending, spoken === 0);
+      if (end > 0) { speakQueued(pending.slice(0, end), lang); spoken += end; }
+    }
+  };
+  let raw;
+  try { raw = await llmGenerate(refineSys, `DRAFT STRATEGY:\n${pass1}\n\nExam + constraints again:\n${userMsg}`, { onToken, maxTokens: 12000, temperature: 0.2 }); }
+  catch { raw = pass1; }
+  if (!raw || !raw.trim()) raw = pass1;
+  const { text: reply, options, suggestions } = parseStructured(raw);
+  bubble.classList.remove("thinking");
+  setBubbleText(bubble, reply);
+  decorateBubble(bubble, options, suggestions);
+  messages.push({ role: "assistant", text: reply, options, suggestions }); persist();
+  setStatus("Exam strategy 🎯");
+  if (source === "voice") { const rest = reply.slice(spoken).trim(); if (rest) speakQueued(rest, lang); }
+}
+function setExamStrat(on) {
+  store.examstrat = on;
+  const b = $("examBtn"); if (b) b.classList.toggle("on", on);
+  setStatus(on ? "Exam strategy 🎯 — attach your exam sheet and I'll maximize your score" : "Exam strategy off");
+}
+
 /* Turn an HTTP failure into a clear, actionable line instead of a vague "offline". */
 function httpErrorMessage(status, body, lang) {
   if (status === 401 || status === 403)
@@ -978,6 +1062,23 @@ async function submit(text, source, atts) {
     return finish(off ? (ko ? "게임 개발 모드를 종료합니다." : "Game Development mode off.")
       : (ko ? "게임 개발 모드 가동합니다. 어떤 게임이든 설명만 해주세요 — 모바일과 PC 모두에 최적화된, 제대로 된 구조의 게임으로 만들어 드릴게요."
             : "Game Development mode engaged, sir. Describe any game — I'll build it with a professional file structure, high-detail art, and controls optimized for both mobile and PC."), lang, source);
+  }
+
+  // Exam strategy mode 🎯 — toggle by command; then any request (with the attached
+  // exam) is routed to the score-maximizing strategist.
+  if (EXAM_RE.test(low)) {
+    const off = /\b(off|end|exit|stop|disable)\b|꺼|끄|해제|종료/.test(low);
+    const ko = lang === "ko-KR";
+    setExamStrat(!off);
+    if (off) return finish(ko ? "시험 전략 모드를 종료합니다." : "Exam strategy mode off.", lang, source);
+    // Turning it ON with an exam already attached? Run the analysis right away.
+    if (atts && atts.length) { runExam(text.replace(EXAM_RE, "").trim(), lang, source, atts, acked); return; }
+    return finish(ko ? "시험 전략 모드 가동합니다. 시험지를 사진이나 파일로 첨부하고, 시간 제한·감점 규칙 같은 조건을 알려주세요 — 점수를 최대화하는 전략을 드릴게요."
+      : "Exam strategy mode engaged, sir. Attach your exam sheet — photo or file — and tell me your time limit and any scoring rules. I'll give you the plan to maximize your score.", lang, source);
+  }
+  if (store.examstrat && !parseStrain(text)) {
+    runExam(text, lang, source, atts, acked);
+    return;
   }
 
   // Gourmet mode 🍽 — toggle by command; handle food requests with real local data.
@@ -1330,6 +1431,8 @@ function boot() {
   $("micAI").onclick = () => setAIMuted(!aiMuted);
   $("gourmetBtn").onclick = () => setGourmet(!store.gourmet);
   $("gourmetBtn").classList.toggle("on", store.gourmet);
+  $("examBtn").onclick = () => setExamStrat(!store.examstrat);
+  $("examBtn").classList.toggle("on", store.examstrat);
   $("open3d").onclick = () => switchTab("studio");
   // desktop hotkeys: "/" focuses the message box; Ctrl/Cmd+Enter generates a build
   document.addEventListener("keydown", (e) => {
