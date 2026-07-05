@@ -13,6 +13,10 @@ const REACTION_KO = "액티그, 대기 중입니다.";        // Korean greeting
 //  it has no browser CORS headers so it also needs the proxy in web/proxy/.)
 const DEFAULT_ENDPOINT = "https://text.pollinations.ai/openai";
 const DEFAULT_MODEL = "openai";
+// NVIDIA's OpenAI-compatible endpoint — auto-selected when a Nemotron/NVIDIA model
+// is chosen (a CORS proxy URL pasted by the user always takes precedence).
+const NVIDIA_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions";
+const NV_MODEL_RE = /nemotron|^nvidia\//i;
 // Optional fallback NVIDIA key (used only if you switch the endpoint to NVIDIA).
 const BUILTIN_KEY = "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";
 // Endpoints that need no Authorization header (keyless, browser-callable).
@@ -64,6 +68,17 @@ const store = {
   if (md.includes("nemotron")) localStorage.removeItem("actig.model");
   localStorage.setItem("actig.cfgv", "2");
 })();
+
+/* Keep the endpoint paired with the chosen model, so setting a Nemotron/NVIDIA
+   model actually TALKS to NVIDIA instead of staying on the default OpenAI-compatible
+   free endpoint. Only the two known defaults are ever swapped — a custom URL the
+   user pasted (e.g. their CORS proxy) is never touched. Returns true if changed. */
+function syncEndpointToModel() {
+  const model = store.model, ep = store.endpoint;
+  if (NV_MODEL_RE.test(model) && ep === DEFAULT_ENDPOINT) { store.endpoint = NVIDIA_ENDPOINT; return true; }
+  if (!NV_MODEL_RE.test(model) && ep === NVIDIA_ENDPOINT) { store.endpoint = DEFAULT_ENDPOINT; return true; }
+  return false;
+}
 
 let messages = store.history;        // {role, text, options?, suggestions?}
 let aiMuted = false, userMuted = false, speaking = false;
@@ -1419,6 +1434,7 @@ function boot() {
   // restore transcript (show the clean display text + attachment badges)
   messages.forEach(m => addBubble(m.role === "user" ? "user" : "ai", m.display || m.text, m.options, m.suggestions, m.attNames || []));
   // settings
+  syncEndpointToModel();               // heal installs saved with a mismatched pair
   $("apiKey").value = store.key; $("preferOffline").checked = store.offline;
   $("model").value = store.model; $("endpoint").value = store.endpoint;
   $("buildModel").value = store.buildModel; $("ghToken").value = store.ghToken;
@@ -1438,8 +1454,11 @@ function boot() {
     if (store.lang !== "auto") lastLang = store.lang;
     if (store.lang === "ko-KR") speech().then(sp => sp.warmup?.(undefined, "Xenova/whisper-base")).catch(() => {});
     store.offline = $("preferOffline").checked;
-    $("model").value = store.model; $("endpoint").value = store.endpoint; // reflect defaults
-    setStatus("Saved");
+    const swapped = syncEndpointToModel();   // pair the endpoint with the chosen model
+    $("model").value = store.model; $("endpoint").value = store.endpoint; // reflect defaults + sync
+    setStatus(swapped
+      ? (NV_MODEL_RE.test(store.model) ? "Saved — endpoint switched to NVIDIA for your Nemotron model" : "Saved — endpoint back on the free default brain")
+      : "Saved");
   };
   $("clearHistory").onclick = () => { messages = []; persist(); $("transcript").innerHTML = ""; };
   // input

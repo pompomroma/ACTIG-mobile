@@ -95,8 +95,12 @@
         </label>
         <h3>AI brain</h3>
         <p class="muted">Works out of the box — no key, no setup. The default brain
-        is a free, browser-friendly endpoint. Want NVIDIA Nemotron instead? Fill in
-        the fields below (NVIDIA also needs the proxy in <code>web/proxy</code>).</p>
+        is a free, browser-friendly endpoint. Want NVIDIA Nemotron instead? Set the
+        Model to a Nemotron id and Save — the endpoint switches to NVIDIA
+        automatically (and back to the free brain if you clear the model). Browsers
+        can't call NVIDIA directly (CORS), so if requests fail, paste your proxy URL
+        from <code>web/proxy</code> into the endpoint field — a custom endpoint you
+        paste is never auto-changed.</p>
         <label>API key (optional — not needed for the default brain)
           <input id="apiKey" type="password" placeholder="(none needed)" autocomplete="off" />
         </label>
