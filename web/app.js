@@ -597,8 +597,10 @@ async function pollinationsGet(history, lang, onToken) {
 /* OpenAI-compatible streaming POST core. Takes an explicit messages array and
    params so both chat and the code generator can share it. Returns the reply
    text; throws on failure (with .status/.body for HTTP errors). */
-async function openaiPostRaw(endpoint, messages, { onToken, key, model, maxTokens = 512, temperature = 0.6 } = {}) {
-  const headers = { "content-type": "application/json" };
+async function openaiPostRaw(endpoint, messages, { onToken, key, model, maxTokens = 512, temperature = 0.6, contentType } = {}) {
+  // contentType "text/plain" makes this a CORS "simple request" (no preflight);
+  // the endpoint still parses the JSON body — used as a preflight-blocked fallback.
+  const headers = { "content-type": contentType || "application/json" };
   if (key) headers["authorization"] = "Bearer " + key;
   const res = await fetch(endpoint, {
     method: "POST",
@@ -682,21 +684,30 @@ async function llmGenerate(system, user, { onToken, maxTokens = 4000, temperatur
   const model = store.buildModel || store.model;
   const messages = [{ role: "system", content: system }, { role: "user", content: user }];
   if (keyless) {
-    // Streaming GET first (no CORS preflight); POST as a fallback.
-    try { return await pollinationsGenerate(system, user, model, onToken); }
-    catch { return await openaiPostRaw(endpoint, messages, { onToken, key: "", model, maxTokens, temperature }); }
+    // CODEGEN MUST GO POST-FIRST: the GET path carries no max_tokens (the server's
+    // short default truncates whole projects into static "sheets") and stuffs the
+    // multi-KB prompt into the URL where length limits cut off the game rules.
+    // Chain: JSON POST → text/plain POST (no CORS preflight) → GET last resort.
+    try { return await openaiPostRaw(endpoint, messages, { onToken, key: "", model, maxTokens, temperature }); }
+    catch {}
+    try { return await openaiPostRaw(endpoint, messages, { onToken, key: "", model, maxTokens, temperature, contentType: "text/plain" }); }
+    catch {}
+    return await pollinationsGenerate(system, user, model, onToken, maxTokens, temperature);
   }
   return await openaiPostRaw(endpoint, messages, { onToken, key, model, maxTokens, temperature });
 }
 
-/* Pollinations GET for a system+user codegen prompt (no preflight, streamed). */
-async function pollinationsGenerate(system, user, model, onToken) {
+/* Pollinations GET for a system+user codegen prompt (no preflight, streamed).
+   Last-resort path only: URL length caps the prompt and the server may ignore
+   the max_tokens/temperature params — but we send them in case it honors them. */
+async function pollinationsGenerate(system, user, model, onToken, maxTokens, temperature) {
   const prompt = system + "\n\n" + user;
   const enc = encodeURIComponent(prompt);
   const m = encodeURIComponent(model || "openai");
+  const extra = (maxTokens ? `&max_tokens=${maxTokens}` : "") + (temperature !== undefined ? `&temperature=${temperature}` : "");
   const variants = [
-    `https://text.pollinations.ai/${enc}?model=${m}&stream=true&referrer=actig-pwa`,
-    `https://text.pollinations.ai/${enc}?model=${m}&referrer=actig-pwa`,
+    `https://text.pollinations.ai/${enc}?model=${m}&stream=true&referrer=actig-pwa${extra}`,
+    `https://text.pollinations.ai/${enc}?model=${m}&referrer=actig-pwa${extra}`,
   ];
   let lastErr;
   for (let i = 0; i < variants.length; i++) {
