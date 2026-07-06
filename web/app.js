@@ -71,12 +71,20 @@ const store = {
 
 /* Keep the endpoint paired with the chosen model, so setting a Nemotron/NVIDIA
    model actually TALKS to NVIDIA instead of staying on the default OpenAI-compatible
-   free endpoint. Only the two known defaults are ever swapped — a custom URL the
-   user pasted (e.g. their CORS proxy) is never touched. Returns true if changed. */
+   free endpoint. Lenient on purpose: ANY pollinations URL counts as "the default",
+   a Nemotron id in EITHER model field counts as NVIDIA intent, and an NVIDIA
+   endpoint with no NVIDIA model flips back. A custom URL the user pasted (e.g.
+   their CORS proxy) is never touched. Returns true if the endpoint changed. */
+const isNvModel = (m) => { m = (m || "").trim(); return NV_MODEL_RE.test(m) || m.includes("/"); }; // NVIDIA ids are vendor/model
+const isDefaultEndpoint = (ep) => !ep || KEYLESS.test(ep);
+const isNvEndpoint = (ep) => /integrate\.api\.nvidia\.com/i.test(ep || "");
 function syncEndpointToModel() {
-  const model = store.model, ep = store.endpoint;
-  if (NV_MODEL_RE.test(model) && ep === DEFAULT_ENDPOINT) { store.endpoint = NVIDIA_ENDPOINT; return true; }
-  if (!NV_MODEL_RE.test(model) && ep === NVIDIA_ENDPOINT) { store.endpoint = DEFAULT_ENDPOINT; return true; }
+  // Nemotron typed only into "Build model"? Adopt it as THE model — chat would
+  // otherwise still call the default model against the NVIDIA endpoint and fail.
+  if (isNvModel(store.buildModel) && !isNvModel(store.model)) store.model = store.buildModel;
+  const nv = isNvModel(store.model), ep = store.endpoint;
+  if (nv && isDefaultEndpoint(ep)) { store.endpoint = NVIDIA_ENDPOINT; return true; }
+  if (!nv && isNvEndpoint(ep)) { store.endpoint = DEFAULT_ENDPOINT; return true; }
   return false;
 }
 
@@ -1457,9 +1465,19 @@ function boot() {
     const swapped = syncEndpointToModel();   // pair the endpoint with the chosen model
     $("model").value = store.model; $("endpoint").value = store.endpoint; // reflect defaults + sync
     setStatus(swapped
-      ? (NV_MODEL_RE.test(store.model) ? "Saved — endpoint switched to NVIDIA for your Nemotron model" : "Saved — endpoint back on the free default brain")
+      ? (isNvModel(store.model) ? "Saved — endpoint switched to NVIDIA for your Nemotron model" : "Saved — endpoint back on the free default brain")
       : "Saved");
   };
+  // Live pairing: the endpoint field follows the model fields AS YOU TYPE, so you
+  // can see NVIDIA selected before ever tapping Save (Save persists it).
+  const pairLive = () => {
+    const nv = isNvModel($("model").value) || isNvModel($("buildModel").value);
+    const cur = $("endpoint").value.trim();
+    if (nv && isDefaultEndpoint(cur)) $("endpoint").value = NVIDIA_ENDPOINT;
+    else if (!nv && isNvEndpoint(cur)) $("endpoint").value = DEFAULT_ENDPOINT;
+  };
+  $("model").addEventListener("input", pairLive);
+  $("buildModel").addEventListener("input", pairLive);
   $("clearHistory").onclick = () => { messages = []; persist(); $("transcript").innerHTML = ""; };
   // input
   $("send").onclick = send; $("draft").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
