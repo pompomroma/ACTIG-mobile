@@ -24,7 +24,7 @@ const KEYLESS = /pollinations\.ai/i;
 
 const $ = (id) => document.getElementById(id);
 const store = {
-  get key() { return (localStorage.getItem("actig.key") || BUILTIN_KEY).trim(); },
+  get key() { return (localStorage.getItem("actig.key") || "").trim(); },
   set key(v) { localStorage.setItem("actig.key", (v || "").trim()); },
   get endpoint() { return (localStorage.getItem("actig.endpoint") || DEFAULT_ENDPOINT).trim(); },
   set endpoint(v) { localStorage.setItem("actig.endpoint", (v || "").trim() || DEFAULT_ENDPOINT); },
@@ -525,7 +525,7 @@ function systemPrompt(lang) {
 async function callLLM(history, lang, onToken) {
   const endpoint = store.endpoint;
   const keyless = KEYLESS.test(endpoint);   // Pollinations etc. need no key
-  const key = store.key;
+  const key = keyless ? "" : (store.key || BUILTIN_KEY);
   // Honour the explicit "prefer offline" choice; only require a key for
   // endpoints that actually need one (NVIDIA). Real failures get a specific msg.
   if (store.offline) return offlineReply(lang);
@@ -665,7 +665,7 @@ async function openaiPost(endpoint, history, lang, onToken, key) {
 async function callLLMVision(history, images, lang, onToken) {
   const endpoint = store.endpoint;
   const keyless = KEYLESS.test(endpoint);
-  const key = store.key;
+  const key = store.key || BUILTIN_KEY;
   const src = history.filter(m => m.role !== "sys");
   const messages = [{ role: "system", content: systemPrompt(lang) }];
   src.forEach((m, i) => {
@@ -688,6 +688,7 @@ async function callLLMVision(history, images, lang, onToken) {
 async function visionDescribe(images, instruction) {
   const endpoint = store.endpoint;
   const keyless = KEYLESS.test(endpoint);
+  const key = store.key || BUILTIN_KEY; 
   const content = [{ type: "text", text: instruction }];
   for (const im of images.slice(0, 4)) content.push({ type: "image_url", image_url: { url: im.dataUrl } });
   const messages = [
@@ -705,7 +706,7 @@ async function llmGenerate(system, user, { onToken, maxTokens = 4000, temperatur
   if (store.offline) throw new Error("offline mode is on — turn off ‘Prefer offline’ in Settings");
   const endpoint = store.endpoint;
   const keyless = KEYLESS.test(endpoint);
-  const key = store.key;
+  const key = store.key || BUILTIN_KEY
   const model = store.buildModel || store.model;
   const messages = [{ role: "system", content: system }, { role: "user", content: user }];
   if (keyless) {
@@ -1443,10 +1444,14 @@ function boot() {
   messages.forEach(m => addBubble(m.role === "user" ? "user" : "ai", m.display || m.text, m.options, m.suggestions, m.attNames || []));
   // settings
   syncEndpointToModel();               // heal installs saved with a mismatched pair
-  $("apiKey").value = store.key; $("preferOffline").checked = store.offline;
-  $("model").value = store.model; $("endpoint").value = store.endpoint;
-  $("buildModel").value = store.buildModel; $("ghToken").value = store.ghToken;
-  $("buildQuality").value = store.quality; $("langPref").value = store.lang;
+  $("apiKey").value = store.key;
+  $("preferOffline").checked = store.offline;
+  $("model").value = store.model;
+  $("endpoint").value = store.endpoint;
+  $("buildModel").value = store.buildModel;
+  $("ghToken").value = store.ghToken;
+  $("buildQuality").value = store.quality;
+  $("langPref").value = store.lang;
   if (store.lang !== "auto") lastLang = store.lang;
   // Korean preference → download/prime the better Korean STT model up front,
   // so no voice turn ever stalls on a mid-conversation model download.
